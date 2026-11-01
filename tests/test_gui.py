@@ -209,3 +209,16 @@ def test_settings_theme_switch(app, win):
     win.s["theme"] = "light"
     win.apply_theme()
     assert win.p.name == "light"
+
+
+def test_strip_stays_put_while_opening(app, win, monkeypatch):
+    """The strip must not depend on the live window position, which Windows
+    can update after the resize (that made the strip flash at the top)."""
+    from PySide6.QtCore import QRect
+    expected_top = win._strip_rect().top()
+    stale = QRect(win.geometry())                  # position before the resize
+    monkeypatch.setattr(win, "geometry", lambda: stale)
+    win.progress = 0.5
+    win._layout_children()
+    full_top = win._full_rect().top()
+    assert full_top + win.strip.y() == expected_top

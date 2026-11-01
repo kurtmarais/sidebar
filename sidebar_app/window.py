@@ -911,7 +911,9 @@ class SidebarWindow(QWidget):
     def _layout_children(self) -> None:
         w, h = self.width(), self.height()
         strip = self._strip_rect()
-        sy = strip.top() - self.geometry().top() if self.progress > 0 else 0
+        # Use the intended window rect, not self.geometry(): on Windows a resize can be
+        # delivered before the move, and the strip would flash at the top of the screen.
+        sy = strip.top() - self._geometry_for(self.progress).top()
         self.strip.setGeometry(w - STRIP_W if self.edge == "right" else 0, sy, STRIP_W, strip.height())
         panel_rect = QRect(self._panel_x(max(self.progress, 0.0) if not self._sliding else 1.0),
                            MARGIN, int(self.s["panel_width"]), max(0, h - 2 * MARGIN))
@@ -931,6 +933,8 @@ class SidebarWindow(QWidget):
         geo = self._geometry_for(value)
         if self.geometry() != geo:
             self.setGeometry(geo)          # only at the start of opening / end of closing
+            self._layout_children()
+            self.repaint()
         if self._sliding:
             self.ghost.move(self._panel_x(value), MARGIN)   # cheap: move a picture, not the window
         else:
@@ -943,6 +947,8 @@ class SidebarWindow(QWidget):
         if self.progress <= 0:
             self.progress = 0.0001          # switch the window to full size before sliding
             self.setGeometry(self._full_rect())
+            self._layout_children()
+            self.repaint()
         self._layout_children()
         self.panel.ensurePolished()
         if self.panel.layout() is not None:
