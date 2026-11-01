@@ -3,4 +3,4 @@
 // the database means it only works together with your own sign-in.
 // Leave empty to type them once on the phone instead.
 export const SUPABASE_URL = "https://qdtjghnvizeampzvlxrm.supabase.co";
-export const SUPABASE_KEY = "";
+export const SUPABASE_KEY = "sb_publishable_snJFfke6h_8sYNjMo8BPTQ_Z1c2UFHG";
