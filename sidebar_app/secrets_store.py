@@ -12,13 +12,12 @@ import base64
 import hashlib
 import hmac
 import os
-import re
 import time
 from typing import Callable
 
 from . import winplatform
 
-ITERATIONS = 200_000
+ITERATIONS = 600_000      # new secrets; existing ones keep their stored count
 MAX_ATTEMPTS = 5
 LOCKOUT_S = 30
 
@@ -29,7 +28,10 @@ _unb64 = lambda s: base64.b64decode(s.encode("ascii"))  # noqa: E731
 
 
 def valid_pin(pin: str) -> bool:
-    return bool(re.fullmatch(r"\d{4}", pin or ""))
+    """A PIN of 4+ digits or a passphrase (4 to 64 characters). Longer is much
+    stronger: a 4-digit PIN can be guessed in minutes by someone who has your
+    Windows account and a copy of the notes database."""
+    return 4 <= len(pin or "") <= 64
 
 
 def _derive(pin: str, salt: bytes, iterations: int) -> bytes:
@@ -42,7 +44,7 @@ def is_initialised(content: dict) -> bool:
 
 def create(pin: str, plaintext: str, protect: Protect = winplatform.dpapi_protect) -> dict:
     if not valid_pin(pin):
-        raise ValueError("PIN must be 4 digits")
+        raise ValueError("PIN must be at least 4 characters")
     fp_salt, key_salt = os.urandom(16), os.urandom(16)
     content = {
         "iter": ITERATIONS,

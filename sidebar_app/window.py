@@ -481,7 +481,7 @@ class SidebarWindow(QWidget):
         self.list.remove(card_id)
         if asset:
             try:
-                (self.assets_dir / asset).unlink()
+                (self.assets_dir / Path(asset).name).unlink()   # never outside assets/
             except OSError:
                 pass
         self.refresh()

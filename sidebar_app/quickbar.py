@@ -22,7 +22,7 @@ DEFAULT_SOUND_NAME = "Airplane cabin"
 DEFAULT_APP_NAME = "caffeine64.exe"
 
 try:  # Embedded playback needs Qt WebEngine (installed with PySide6 on Windows).
-    from PySide6.QtWebEngineCore import QWebEngineSettings
+    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
     from PySide6.QtWebEngineWidgets import QWebEngineView
     HAVE_WEBENGINE = True
 except ImportError:  # pragma: no cover - depends on the installed wheels
@@ -200,6 +200,9 @@ class FocusSoundTile(Tile):
             return
         if self.view is None:
             self.view = QWebEngineView()
+            # Off-the-record profile: YouTube cookies and history are never written to disk.
+            self._profile = QWebEngineProfile(self.view)
+            self.view.setPage(QWebEnginePage(self._profile, self.view))
             self.view.setAttribute(Qt.WA_DontShowOnScreen, True)
             self.view.resize(320, 180)
             s = self.view.settings()

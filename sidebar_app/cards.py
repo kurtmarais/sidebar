@@ -15,7 +15,7 @@ from typing import Callable
 
 from PySide6.QtCore import QDate, QDateTime, QMimeData, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
-    QColor, QDesktopServices, QDrag, QFont, QIntValidator, QKeyEvent, QPainter,
+    QColor, QDesktopServices, QDrag, QFont, QKeyEvent, QPainter,
     QPainterPath, QPixmap, QSyntaxHighlighter, QTextCharFormat,
 )
 from PySide6.QtWidgets import (
@@ -550,6 +550,20 @@ class CodeBody(CardBody):
 
 
 # -------------------------------------------------------------------- links
+SAFE_SCHEMES = {"http", "https", "mailto"}
+
+
+def safe_link(text: str) -> QUrl | None:
+    """URL to open, or None. Other schemes (file:, ms-*:, javascript: and the
+    like) can launch programs through Windows protocol handlers, and links can
+    now arrive from the phone, so only web and mail links are opened."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    url = QUrl.fromUserInput(text)
+    return url if url.isValid() and url.scheme().lower() in SAFE_SCHEMES else None
+
+
 class LinkRow(QWidget):
     def __init__(self, body: "LinksBody", label: str, url: str):
         super().__init__()
@@ -588,9 +602,11 @@ class LinkRow(QWidget):
         retint(self.remove, self.body.p)
 
     def open_link(self) -> None:
-        text = self.url.text().strip()
-        if text:
-            QDesktopServices.openUrl(QUrl.fromUserInput(text))
+        url = safe_link(self.url.text())
+        if url is not None:
+            QDesktopServices.openUrl(url)
+        elif self.url.text().strip():
+            self.url.setToolTip("Only http, https and mailto links open from cards")
 
     def enterEvent(self, e):  # noqa: N802
         self.remove.setVisible(True)
@@ -690,7 +706,7 @@ class ImageBody(CardBody):
             self.view.setProperty("muted", True)
 
     def path(self) -> Path:
-        return self.env.assets_dir / self.asset
+        return self.env.assets_dir / Path(self.asset).name    # name only: stays inside assets/
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
@@ -789,11 +805,9 @@ def _pin_field(placeholder: str, p: Palette) -> QLineEdit:
     f.setStyleSheet(f"QLineEdit {{ background: {p.surface}; border: 1px solid {p.panel_border};"
                     f" border-radius: 6px; padding: 3px; }} QLineEdit:focus {{ border-color: {p.strip}; }}")
     f.setEchoMode(QLineEdit.Password)
-    f.setMaxLength(4)
-    f.setValidator(QIntValidator(0, 9999))
+    f.setMaxLength(64)
     f.setPlaceholderText(placeholder)
-    f.setFixedWidth(90)
-    f.setAlignment(Qt.AlignCenter)
+    f.setMinimumWidth(110)
     return f
 
 
@@ -833,7 +847,8 @@ class SecretBody(CardBody):
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
-        info = QLabel("Choose a 4-digit PIN. It cannot be recovered if forgotten.")
+        info = QLabel("Choose a PIN or passphrase (at least 4 characters; longer is much safer). "
+                      "It cannot be recovered if forgotten.")
         info.setWordWrap(True)
         info.setProperty("muted", True)
         row = QHBoxLayout()
@@ -850,7 +865,7 @@ class SecretBody(CardBody):
         def submit() -> None:
             a, b = pin1.text(), pin2.text()
             if not secrets_store.valid_pin(a):
-                err.setText("PIN must be 4 digits.")
+                err.setText("Use at least 4 characters.")
             elif a != b:
                 err.setText("PINs do not match.")
             else:

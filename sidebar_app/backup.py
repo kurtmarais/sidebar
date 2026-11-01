@@ -43,6 +43,7 @@ def export_json(db: Database, path: Path, assets_dir: Path, include_secrets: boo
     blobs = {}
     for card in data["cards"]:
         asset = (card.get("content") or {}).get("asset")
+        asset = Path(asset).name if asset else asset            # never read outside assets/
         if asset and asset not in blobs and (assets_dir / asset).is_file():
             blobs[asset] = base64.b64encode((assets_dir / asset).read_bytes()).decode("ascii")
     data["assets"] = blobs

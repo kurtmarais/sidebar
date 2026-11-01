@@ -129,7 +129,7 @@ def test_secret_roundtrip_and_wrong_pin():
     with pytest.raises(ValueError):
         secrets_store.reveal(c, "9999", fake_protect)
     with pytest.raises(ValueError):
-        secrets_store.create("12a4", "x", fake_protect)
+        secrets_store.create("123", "x", fake_protect)
 
 
 def test_pin_guard_lockout():
