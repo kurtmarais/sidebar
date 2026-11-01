@@ -25,7 +25,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu,
-    QMessageBox, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
+    QDialog, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
@@ -218,6 +218,7 @@ class SidebarWindow(QWidget):
         for scr in QGuiApplication.screens():
             scr.availableGeometryChanged.connect(lambda _g: self.reposition())
 
+        dialogs.set_placer(self.place_beside)
         self.load_cards()
         self.apply_theme()
         self._update_context_timer()
@@ -1150,11 +1151,26 @@ class SidebarWindow(QWidget):
         m.addSeparator()
         if updater.repo_root() is not None:
             m.addAction("Update and restart", self.update_and_restart)
+            errors = self.data_dir / "error.log"
+            if errors.exists() and errors.stat().st_size:
+                m.addAction("View error log", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(errors))))
             log = self.data_dir / "update.log"
             if log.exists():
                 m.addAction("View update log", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(log))))
         m.addAction("Hide sidebar", lambda: self.collapse(force=True))
         m.addAction("Quit Sidebar", QApplication.quit)
+
+    def place_beside(self, dlg: QWidget) -> None:
+        """Put a dialog next to the open panel instead of on top of it."""
+        scr = self._screen().availableGeometry()
+        full = self._full_rect()
+        size = dlg.sizeHint().expandedTo(dlg.size())
+        w, h = size.width() + 16, size.height() + 40        # allow for the title bar and border
+        gap = 12
+        x = full.left() - w - gap if self.edge == "right" else full.right() + gap
+        x = max(scr.left(), min(x, scr.right() - w))
+        y = max(scr.top(), scr.top() + (scr.height() - h) // 3)
+        dlg.move(x, y)
 
     def update_and_restart(self) -> None:
         """Close, pull the latest version from git, and start again."""
@@ -1164,7 +1180,7 @@ class SidebarWindow(QWidget):
     def open_settings(self) -> None:
         self.expand(activate=True)
         dlg = dialogs.SettingsDialog(self, self.s, str(self.data_dir))
-        if dlg.exec() != dlg.Accepted:
+        if dialogs.run(dlg) != QDialog.DialogCode.Accepted:
             return
         values = dlg.values()
         old_top = self.s["always_on_top"]
@@ -1175,7 +1191,8 @@ class SidebarWindow(QWidget):
             try:
                 winplatform.set_startup_enabled(dlg.startup_enabled())
             except OSError as exc:
-                QMessageBox.warning(self, "Start with Windows", f"Could not update the startup entry:\n{exc}")
+                dialogs.message(self, "Start with Windows",
+                                f"Windows did not accept the startup entry.\n\n{exc}", "warning")
         if old_top != self.s["always_on_top"]:
             self._apply_flags()
             self.show()
@@ -1188,10 +1205,10 @@ class SidebarWindow(QWidget):
     def export_backup(self) -> None:
         include = False
         if any(w.card.type == "secret" for w in self.list.widgets.values()):
-            include = QMessageBox.question(
+            include = dialogs.message(
                 self, "Export backup",
                 "Include secret notes?\nThey stay encrypted and can only be opened with their PIN "
-                "on this Windows account.") == QMessageBox.Yes
+                "on this Windows account.", "question", ("Include", "Leave out")) == "Include"
         path, _ = QFileDialog.getSaveFileName(
             self, "Export backup", str(Path.home() / f"sidebar-backup-{datetime.now():%Y%m%d}.json"),
             "Sidebar backup (*.json)")
@@ -1209,7 +1226,7 @@ class SidebarWindow(QWidget):
         try:
             added = backup.import_json(self.db, Path(path), self.assets_dir, self.backup_dir)
         except (ValueError, OSError, KeyError) as exc:
-            QMessageBox.warning(self, "Restore backup", f"Could not restore this file:\n{exc}")
+            dialogs.message(self, "Restore backup", f"Could not restore this file:\n{exc}", "warning")
             return
         known = set(self.list.widgets)
         for card in self.db.cards():
@@ -1218,7 +1235,7 @@ class SidebarWindow(QWidget):
         self.list.order = [c.id for c in self.db.cards()]
         self._rebuild_tabs()
         self.refresh()
-        QMessageBox.information(self, "Restore backup",
+        dialogs.message(self, "Restore backup",
                                 f"Added {added} note{'s' if added != 1 else ''}. Existing notes were left unchanged.")
 
     def export_markdown(self) -> None:

@@ -62,56 +62,113 @@ if IS_WINDOWS:
 
 
 # --------------------------------------------------------------- startup
-def startup_command() -> str:
+# "Start with Windows" uses the per-user Run registry value. Some managed
+# PCs block writing it, so the fallback is a shortcut in the user's Startup
+# folder. Either one counts as enabled.
+
+def startup_parts() -> tuple[str, str, str]:
+    """(program, arguments, working folder) that start this copy of the app."""
     if getattr(sys, "frozen", False):
-        return f'"{sys.executable}"'
+        return sys.executable, "", str(Path(sys.executable).parent)
     exe = Path(sys.executable)
     pythonw = exe.with_name("pythonw.exe")
-    runner = Path(__file__).resolve().parent.parent / "run_sidebar.py"
-    return f'"{pythonw if pythonw.exists() else exe}" "{runner}"'
+    root = Path(__file__).resolve().parent.parent
+    return str(pythonw if pythonw.exists() else exe), f'"{root / "run_sidebar.py"}"', str(root)
+
+
+def startup_command() -> str:
+    program, args, _ = startup_parts()
+    return f'"{program}" {args}'.strip()
+
+
+def startup_shortcut() -> Path:
+    appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / f"{APP_NAME}.lnk"
+
+
+def _registry_value() -> str | None:
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            return winreg.QueryValueEx(key, APP_NAME)[0]
+    except OSError:
+        return None
 
 
 def is_startup_enabled() -> bool:
     if not IS_WINDOWS:
         return False
+    return _registry_value() is not None or startup_shortcut().exists()
+
+
+def _create_shortcut(lnk: Path) -> None:
+    """Write a .lnk with the Windows Script Host (values passed via environment, no quoting issues)."""
+    import subprocess
+    program, args, workdir = startup_parts()
+    script = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:SB_LNK);"
+              "$s.TargetPath=$env:SB_TARGET;$s.Arguments=$env:SB_ARGS;"
+              "$s.WorkingDirectory=$env:SB_DIR;$s.Save()")
+    lnk.parent.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, SB_LNK=str(lnk), SB_TARGET=program, SB_ARGS=args, SB_DIR=workdir)
+    proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                           "-Command", script], env=env, capture_output=True, text=True, timeout=30,
+                          creationflags=0x08000000)
+    if not lnk.exists():
+        raise OSError((proc.stderr or proc.stdout or "shortcut was not created").strip())
+
+
+def set_startup_enabled(enabled: bool) -> str:
+    """Turn Start with Windows on or off. Returns how it was done
+    ('registry', 'startup folder' or 'off'); raises OSError if it could not be done."""
+    if not IS_WINDOWS:
+        return "off"
     import winreg
+    lnk = startup_shortcut()
+    if not enabled:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, APP_NAME)
+        except OSError:
+            pass
+        try:
+            lnk.unlink()
+        except OSError:
+            pass
+        if is_startup_enabled():
+            raise OSError("The startup entry could not be removed.")
+        return "off"
+
+    command = startup_command()
+    registry_error = ""
     try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
-            winreg.QueryValueEx(key, APP_NAME)
-            return True
-    except OSError:
-        return False
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, command)
+    except OSError as exc:
+        registry_error = str(exc)
+    if _registry_value() == command:
+        try:
+            lnk.unlink()          # avoid two entries
+        except OSError:
+            pass
+        return "registry"
+    try:
+        _create_shortcut(lnk)
+    except (OSError, ValueError) as exc:
+        raise OSError(f"Registry: {registry_error or 'value did not stick'}\n"
+                      f"Startup folder: {exc}") from exc
+    return "startup folder"
 
 
 def refresh_startup_entry() -> bool:
-    """If Start with Windows is on but points somewhere else (an old folder or
-    exe), point it at the copy that is running now. Returns True if fixed."""
+    """If the registry entry points at an old folder or exe, point it at the
+    copy that is running now. Returns True if it was updated."""
     if not IS_WINDOWS:
         return False
-    import winreg
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
-            current, _ = winreg.QueryValueEx(key, APP_NAME)
-    except OSError:
-        return False
-    if current == startup_command():
+    current = _registry_value()
+    if current is None or current == startup_command():
         return False
     set_startup_enabled(True)
     return True
-
-
-def set_startup_enabled(enabled: bool) -> None:
-    if not IS_WINDOWS:
-        return
-    import winreg
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
-        if enabled:
-            winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, startup_command())
-        else:
-            try:
-                winreg.DeleteValue(key, APP_NAME)
-            except FileNotFoundError:
-                pass
 
 
 # ---------------------------------------------------------------- hotkey

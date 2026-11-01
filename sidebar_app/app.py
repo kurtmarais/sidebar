@@ -45,6 +45,26 @@ def _pick_font() -> QFont:
     return QApplication.font()
 
 
+def _install_error_log(path: Path) -> None:
+    """The app runs without a console (pyw), so record unexpected errors in a file."""
+    import time
+    import traceback
+
+    def hook(exc_type, exc, tb):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists() and path.stat().st_size > 200_000:
+                path.write_text("", encoding="utf-8")
+            with path.open("a", encoding="utf-8") as f:
+                f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} (version {__version__})\n")
+                f.write("".join(traceback.format_exception(exc_type, exc, tb)) + "\n")
+        except OSError:
+            pass
+        sys.__excepthook__(exc_type, exc, tb)
+
+    sys.excepthook = hook
+
+
 def build_tray(app: QApplication, win: SidebarWindow) -> QSystemTrayIcon | None:
     if not QSystemTrayIcon.isSystemTrayAvailable():
         return None
@@ -93,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     except OSError:
         pass
     data_dir = args.data_dir or default_data_dir()
+    _install_error_log(data_dir / "error.log")
     db = Database(data_dir / "sidebar.db")
     try:
         backup.auto_backup(db, data_dir / "backups")

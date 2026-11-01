@@ -2,14 +2,51 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 from PySide6.QtCore import QDate, QDateTime, Qt, QTime
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QCalendarWidget, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QTimeEdit, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from . import updater, winplatform
+
+# The sidebar stays above other windows, so its dialogs must too, and they
+# open beside the panel rather than on top of it. The window installs the
+# placement function at start-up.
+_placer: Callable[[QWidget], None] | None = None
+
+
+def set_placer(fn: Callable[[QWidget], None] | None) -> None:
+    global _placer
+    _placer = fn
+
+
+def run(dlg: QDialog) -> int:
+    """Show a dialog modally, on top and beside the sidebar."""
+    dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    dlg.adjustSize()
+    if _placer is not None:
+        _placer(dlg)
+    return dlg.exec()
+
+
+def message(parent: QWidget | None, title: str, text: str, kind: str = "info",
+            buttons: tuple[str, ...] = ("OK",)) -> str:
+    """Message box that respects the sidebar's stacking. Returns the clicked label."""
+    box = QMessageBox(parent)
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setIcon({"warning": QMessageBox.Warning, "question": QMessageBox.Question}.get(kind, QMessageBox.Information))
+    made = []
+    for i, label in enumerate(buttons):
+        role = QMessageBox.AcceptRole if i == 0 else QMessageBox.RejectRole
+        made.append(box.addButton(label, role))
+    run(box)
+    clicked = box.clickedButton()
+    return clicked.text() if clicked is not None else buttons[-1]
 
 
 def _buttons(dialog: QDialog, ok_text: str = "OK") -> QDialogButtonBox:
@@ -52,7 +89,7 @@ class DatePickerDialog(QDialog):
 def pick_date(parent: QWidget | None, title: str, initial: QDate | None = None) -> QDate | None:
     start = QDateTime(initial or QDate.currentDate(), QTime(9, 0))
     dlg = DatePickerDialog(parent, title, start, with_time=False)
-    return dlg.value().date() if dlg.exec() == QDialog.Accepted else None
+    return dlg.value().date() if run(dlg) == QDialog.Accepted else None
 
 
 def pick_datetime(parent: QWidget | None, title: str, initial: QDateTime | None = None) -> QDateTime | None:
@@ -60,7 +97,7 @@ def pick_datetime(parent: QWidget | None, title: str, initial: QDateTime | None 
         initial = QDateTime.currentDateTime().addSecs(3600)
         initial.setTime(QTime(initial.time().hour(), 0))
     dlg = DatePickerDialog(parent, title, initial, with_time=True)
-    return dlg.value() if dlg.exec() == QDialog.Accepted else None
+    return dlg.value() if run(dlg) == QDialog.Accepted else None
 
 
 def ask_text(parent: QWidget | None, title: str, label: str, text: str = "") -> str | None:
@@ -75,7 +112,7 @@ def ask_text(parent: QWidget | None, title: str, label: str, text: str = "") -> 
     lay.addWidget(edit)
     lay.addWidget(_buttons(dlg))
     dlg.setMinimumWidth(320)
-    if dlg.exec() != QDialog.Accepted:
+    if run(dlg) != QDialog.Accepted:
         return None
     return edit.text().strip()
 

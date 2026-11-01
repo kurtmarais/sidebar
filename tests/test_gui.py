@@ -227,3 +227,78 @@ def test_strip_stays_put_while_opening(app, win, monkeypatch):
     win._layout_children()
     full_top = win._full_rect().top()
     assert full_top + win.strip.y() == expected_top
+
+
+def test_dialogs_open_beside_panel_and_on_top(app, win):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QDialog
+    from sidebar_app import dialogs
+    win.expand()
+    pump(app)
+    dlg = QDialog(win)
+    dlg.resize(300, 200)
+    dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    win.place_beside(dlg)
+    full = win._full_rect()
+    assert dlg.x() + 300 <= full.left()            # left of the right-edge panel, not over it
+    assert dialogs._placer == win.place_beside
+
+
+def test_settings_save_and_persist(app, win, monkeypatch, tmp_path):
+    """Drive Settings → Save through open_settings and check every value
+    reaches the database and survives reopening it."""
+    from PySide6.QtWidgets import QDialog
+    from sidebar_app import dialogs
+    from sidebar_app.storage import Database
+
+    def fill_and_save(dlg):
+        if not isinstance(dlg, dialogs.SettingsDialog):
+            return QDialog.DialogCode.Rejected
+        dlg.title.setText("Kurt's board")
+        dlg.edge.setCurrentIndex(dlg.edge.findData("left"))
+        dlg.width.setValue(400)
+        dlg.theme.setCurrentIndex(dlg.theme.findData("light"))
+        dlg.open_mode.setCurrentIndex(dlg.open_mode.findData("click"))
+        dlg.delay.setValue(800)
+        dlg.strip_length.setValue(55)
+        dlg.focus.setValue(40)
+        dlg.quickbar.setChecked(False)
+        dlg.sound_url.setText("https://youtu.be/co7KgV2edvI")
+        dlg.sound_name.setText("Cabin")
+        dlg.app_path.setText(r"C:\Tools\caffeine64.exe")
+        dlg.on_top.setChecked(False)
+        dlg.hotkey.setChecked(False)
+        dlg.follow.setChecked(False)
+        dlg.meetings.setChecked(False)
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(dialogs, "run", fill_and_save)
+    win.open_settings()
+
+    expected = {
+        "title": "Kurt's board", "edge": "left", "panel_width": 400, "theme": "light",
+        "open_mode": "click", "open_delay_ms": 800, "strip_length": 0.55, "focus_minutes": 40,
+        "show_quickbar": False, "focus_sound_url": "https://youtu.be/co7KgV2edvI",
+        "focus_sound_name": "Cabin", "launch_app_path": r"C:\Tools\caffeine64.exe",
+        "always_on_top": False, "hotkey_enabled": False, "follow_window": False,
+        "suggest_meeting_notes": False,
+    }
+    assert win.title_label.text() == "Kurt's board"        # applied immediately
+    assert win.p.name == "light" and win.quickbar.isHidden()
+    reopened = Database(win.db.path).settings()             # persisted
+    for key, value in expected.items():
+        assert reopened[key] == value, key
+
+
+def test_settings_cancel_changes_nothing(app, win, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+    from sidebar_app import dialogs
+
+    def change_then_cancel(dlg):
+        dlg.title.setText("Should not stick")
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(dialogs, "run", change_then_cancel)
+    before = win.db.settings()["title"]
+    win.open_settings()
+    assert win.db.settings()["title"] == before and win.title_label.text() == before
