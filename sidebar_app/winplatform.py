@@ -149,8 +149,13 @@ def _create_shortcut(lnk: Path) -> None:
 
 
 def set_startup_enabled(enabled: bool) -> str:
-    """Turn Start with Windows on or off. Returns how it was done
-    ('registry', 'startup folder' or 'off'); raises OSError if it could not be done."""
+    """Turn Start with Windows on or off. Returns how it is set up ('registry',
+    'startup folder', 'registry + startup folder' or 'off'); raises OSError if
+    neither method could be set up.
+
+    Both methods are used when possible: some PCs (often work-managed ones,
+    via policy) ignore one of them at sign-in. If both run, the second copy of
+    the app notices the first and exits quietly."""
     if not IS_WINDOWS:
         return "off"
     import winreg
@@ -171,36 +176,52 @@ def set_startup_enabled(enabled: bool) -> str:
 
     command = startup_command()
     _clear_task_manager_disable()      # ticking the box means "on", even if switched off in Task Manager
-    registry_error = ""
+    registry_error = shortcut_error = ""
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, command)
     except OSError as exc:
         registry_error = str(exc)
-    if _registry_value() == command:
-        try:
-            lnk.unlink()          # avoid two entries
-        except OSError:
-            pass
-        return "registry"
     try:
         _create_shortcut(lnk)
     except (OSError, ValueError) as exc:
+        shortcut_error = str(exc)
+    methods = [m for m, ok in (("registry", _registry_value() == command), ("startup folder", lnk.exists())) if ok]
+    if not methods:
         raise OSError(f"Registry: {registry_error or 'value did not stick'}\n"
-                      f"Startup folder: {exc}") from exc
-    return "startup folder"
+                      f"Startup folder: {shortcut_error or 'shortcut was not created'}")
+    return " + ".join(methods)
 
 
 def refresh_startup_entry() -> bool:
-    """If the registry entry points at an old folder or exe, point it at the
-    copy that is running now. Returns True if it was updated."""
+    """Keep Start with Windows pointing at the copy that is running now, and add
+    the Startup-folder shortcut where only the registry entry exists. Returns
+    True if anything was updated."""
     if not IS_WINDOWS:
         return False
     current = _registry_value()
-    if current is None or current == startup_command():
+    if current is None and not startup_shortcut().exists():
+        return False                    # Start with Windows is off
+    if current == startup_command() and startup_shortcut().exists():
         return False
     set_startup_enabled(True)
     return True
+
+
+def run_entries_blocked_by_policy() -> bool:
+    """True if a Windows policy tells Windows to skip per-user Run entries at sign-in."""
+    if not IS_WINDOWS:
+        return False
+    import winreg
+    path = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
+    for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(root, path) as key:
+                if winreg.QueryValueEx(key, "DisableCurrentUserRun")[0]:
+                    return True
+        except OSError:
+            continue
+    return False
 
 
 def package_identity() -> str:

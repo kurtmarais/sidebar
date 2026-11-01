@@ -22,12 +22,17 @@ from .window import SidebarWindow
 SERVER_NAME = f"sidebar-notes-{getpass.getuser()}"
 
 
-def _signal_running_instance() -> bool:
-    """Ask an already running Sidebar to slide out. True if one answered."""
+def _signal_running_instance(show: bool = True) -> bool:
+    """True if a Sidebar is already running. With ``show`` it is asked to slide
+    out (double-clicking the shortcut); without, nothing visible happens (a
+    second sign-in launch from the other startup method)."""
     sock = QLocalSocket()
     sock.connectToServer(SERVER_NAME)
     if not sock.waitForConnected(300):
         return False
+    if not show:
+        sock.disconnectFromServer()
+        return True
     sock.write(b"show")
     sock.flush()
     sock.waitForBytesWritten(300)
@@ -80,7 +85,8 @@ def _log_launch(path: Path, at_startup: bool) -> None:
                 f"{'AT-STARTUP' if at_startup else 'manual'}{uptime} exe={sys.executable} "
                 f"package={winplatform.package_identity() or 'none'} data={path.parent} "
                 f"run_entry={registry!r} startup_shortcut={winplatform.startup_shortcut().exists()} "
-                f"disabled_in_task_manager={winplatform.startup_disabled_in_task_manager()}\n")
+                f"disabled_in_task_manager={winplatform.startup_disabled_in_task_manager()} "
+                f"blocked_by_policy={winplatform.run_entries_blocked_by_policy()}\n")
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists() and path.stat().st_size > 100_000:
             path.write_text("", encoding="utf-8")
@@ -127,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(app_icon())
 
-    if _signal_running_instance():
+    if _signal_running_instance(show=not args.startup):
         return 0
     server = QLocalServer(app)
     QLocalServer.removeServer(SERVER_NAME)

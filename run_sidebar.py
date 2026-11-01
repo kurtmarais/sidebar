@@ -28,7 +28,21 @@ def _crash_report() -> None:
             None, f"Sidebar could not start.\n\nDetails were saved to:\n{log}\n\n{text[-700:]}", "Sidebar", 0x10)
 
 
+def _note_process_start() -> None:
+    """First thing on launch, before Qt loads: proves whether Windows started
+    the app at all, even if it then dies too early to report anything."""
+    base = os.environ.get("SIDEBAR_DATA_DIR") or os.path.join(
+        os.environ.get("APPDATA") or str(Path.home()), "Sidebar")
+    try:
+        Path(base).mkdir(parents=True, exist_ok=True)
+        with open(os.path.join(base, "launch.log"), "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} process started args={sys.argv[1:]}\n")
+    except OSError:
+        pass
+
+
 if __name__ == "__main__":
+    _note_process_start()
     try:
         from sidebar_app.app import main
         code = main()

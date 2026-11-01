@@ -20,7 +20,7 @@ class FakeKey:
 def fake_winreg(store, block_writes):
     """Registry stand-in keyed by (key path, value name)."""
     m = types.ModuleType("winreg")
-    m.HKEY_CURRENT_USER, m.KEY_SET_VALUE, m.REG_SZ = 1, 2, 1
+    m.HKEY_CURRENT_USER, m.HKEY_LOCAL_MACHINE, m.KEY_SET_VALUE, m.REG_SZ = 1, 3, 2, 1
     m.OpenKey = lambda root, path, *a: FakeKey(path)
 
     def query(key, name):
@@ -54,10 +54,10 @@ def windows(monkeypatch, tmp_path):
 def test_registry_used_when_allowed(windows, monkeypatch):
     store = {}
     monkeypatch.setitem(sys.modules, "winreg", fake_winreg(store, block_writes=False))
-    assert winplatform.set_startup_enabled(True) == "registry"
+    assert winplatform.set_startup_enabled(True) == "registry + startup folder"
     assert store[(winplatform.RUN_KEY, "Sidebar")] == winplatform.startup_command()
     assert winplatform.startup_command().endswith("--startup")
-    assert winplatform.is_startup_enabled() and not winplatform.startup_shortcut().exists()
+    assert winplatform.is_startup_enabled() and winplatform.startup_shortcut().exists()
     assert winplatform.set_startup_enabled(False) == "off"
     assert not winplatform.is_startup_enabled()
 
@@ -98,3 +98,59 @@ def test_stale_entry_is_repointed(windows, monkeypatch):
     monkeypatch.setitem(sys.modules, "winreg", fake_winreg(store, block_writes=False))
     assert winplatform.refresh_startup_entry()
     assert store[(winplatform.RUN_KEY, "Sidebar")] == winplatform.startup_command()
+
+
+def test_existing_registry_entry_gains_startup_folder_shortcut(windows, monkeypatch):
+    store = {(winplatform.RUN_KEY, "Sidebar"): winplatform.startup_command()}
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg(store, block_writes=False))
+    assert not winplatform.startup_shortcut().exists()
+    assert winplatform.refresh_startup_entry()            # upgrade on next launch, no re-ticking needed
+    assert winplatform.startup_shortcut().exists()
+    assert not winplatform.refresh_startup_entry()        # nothing more to do
+
+
+def test_off_stays_off(windows, monkeypatch):
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg({}, block_writes=False))
+    assert not winplatform.refresh_startup_entry()
+    assert not winplatform.startup_shortcut().exists()
+
+
+def test_policy_block_detected(windows, monkeypatch):
+    path = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg({(path, "DisableCurrentUserRun"): 1}, False))
+    assert winplatform.run_entries_blocked_by_policy()
+
+
+def test_second_startup_launch_is_silent(tmp_path):
+    """When both startup methods fire, the second copy must exit without
+    sliding the first one open."""
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtNetwork import QLocalServer
+    from PySide6.QtWidgets import QApplication
+    from sidebar_app import app as app_mod
+    qapp = QApplication.instance() or QApplication([])
+    server = QLocalServer()
+    QLocalServer.removeServer(app_mod.SERVER_NAME)
+    assert server.listen(app_mod.SERVER_NAME)
+    received = []
+    server.newConnection.connect(lambda: (c := server.nextPendingConnection()) and
+                                 c.readyRead.connect(lambda: received.append(bytes(c.readAll()))))
+    assert app_mod._signal_running_instance(show=False)
+    for _ in range(20):
+        qapp.processEvents()
+    assert received == []
+    assert app_mod._signal_running_instance(show=True)
+    for _ in range(50):
+        qapp.processEvents()
+    assert received == [b"show"]
+    server.close()
+
+
+def test_launch_log_line_is_written(tmp_path):
+    """The diagnostic line must actually be written (it swallows its own errors)."""
+    from sidebar_app import app as app_mod
+    log = tmp_path / "launch.log"
+    app_mod._log_launch(log, True)
+    line = log.read_text()
+    assert "AT-STARTUP" in line and "package=" in line and "blocked_by_policy=" in line
