@@ -20,7 +20,8 @@ from PySide6.QtCore import (
     QEasingCurve, QPoint, QRect, QSize, Qt, QTimer, QVariantAnimation, Signal,
 )
 from PySide6.QtGui import (
-    QColor, QCursor, QGuiApplication, QImage, QKeySequence, QPainter, QPainterPath, QShortcut,
+    QColor, QCursor, QGuiApplication, QImage, QKeySequence, QPainter, QPainterPath, QPixmap, QRegion,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu,
@@ -41,7 +42,7 @@ from .theme import Palette, app_icon, make_icon, palette, stylesheet
 
 STRIP_W = 6        # collapsed width: the visible blue strip
 MARGIN = 8         # gap around the floating panel
-ANIM_MS = 200
+ANIM_MS = 220
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 MAX_CODE_BYTES = 512 * 1024
@@ -151,6 +152,7 @@ class SidebarWindow(QWidget):
         self.p: Palette = palette(self.s["theme"])
         self.progress = 0.0
         self._target = 0.0
+        self._sliding = False
         self._hotkey_hwnd: int | None = None
         self._context: tuple[str, str] | None = None     # last external foreground window
         self._link_mode = False
@@ -180,6 +182,10 @@ class SidebarWindow(QWidget):
         self.panel = QFrame(self)
         self.panel.setObjectName("panel")
         self._build_panel()
+        self.ghost = QLabel(self)              # snapshot of the panel used while sliding
+        self.ghost.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.ghost.hide()
+        self._sliding = False
 
         self.anim = QVariantAnimation(self)
         self.anim.setDuration(ANIM_MS)
@@ -883,26 +889,37 @@ class SidebarWindow(QWidget):
         x = avail.right() + 1 - STRIP_W if self.edge == "right" else avail.left()
         return QRect(x, y, STRIP_W, length)
 
-    def _geometry_for(self, progress: float) -> QRect:
-        if progress <= 0:
-            return self._strip_rect()
+    def _full_rect(self) -> QRect:
         avail = self._screen().availableGeometry()
-        width = STRIP_W + round((int(self.s["panel_width"]) + MARGIN) * progress)
+        width = STRIP_W + MARGIN + int(self.s["panel_width"])
         x = avail.right() + 1 - width if self.edge == "right" else avail.left()
         return QRect(x, avail.top(), width, avail.height())
 
+    def _geometry_for(self, progress: float) -> QRect:
+        """Window rect: just the strip when closed, full size while open or animating."""
+        return self._strip_rect() if progress <= 0 else self._full_rect()
+
+    def _panel_x(self, progress: float) -> int:
+        """Panel x inside the full-size window; it slides in from the screen edge."""
+        pw = int(self.s["panel_width"])
+        full_w = STRIP_W + MARGIN + pw
+        if self.edge == "right":
+            return round(full_w * (1.0 - progress))                 # open at 0
+        open_x, closed_x = STRIP_W + MARGIN, -pw
+        return round(closed_x + (open_x - closed_x) * progress)
+
     def _layout_children(self) -> None:
         w, h = self.width(), self.height()
-        pw = int(self.s["panel_width"])
         strip = self._strip_rect()
         sy = strip.top() - self.geometry().top() if self.progress > 0 else 0
-        if self.edge == "right":
-            self.strip.setGeometry(w - STRIP_W, sy, STRIP_W, strip.height())
-            self.panel.setGeometry(0, MARGIN, pw, max(0, h - 2 * MARGIN))
+        self.strip.setGeometry(w - STRIP_W if self.edge == "right" else 0, sy, STRIP_W, strip.height())
+        panel_rect = QRect(self._panel_x(max(self.progress, 0.0) if not self._sliding else 1.0),
+                           MARGIN, int(self.s["panel_width"]), max(0, h - 2 * MARGIN))
+        self.panel.setGeometry(panel_rect)
+        if self._sliding:
+            self.ghost.move(self._panel_x(self.progress), MARGIN)
         else:
-            self.strip.setGeometry(0, sy, STRIP_W, strip.height())
-            self.panel.setGeometry(w - pw, MARGIN, pw, max(0, h - 2 * MARGIN))
-        self.panel.setVisible(self.progress > 0)
+            self.panel.setVisible(self.progress > 0)
         self.strip.raise_()
 
     def resizeEvent(self, e):  # noqa: N802
@@ -911,11 +928,52 @@ class SidebarWindow(QWidget):
 
     def _set_progress(self, value: float) -> None:
         self.progress = value
-        self.setGeometry(self._geometry_for(value))
+        geo = self._geometry_for(value)
+        if self.geometry() != geo:
+            self.setGeometry(geo)          # only at the start of opening / end of closing
+        if self._sliding:
+            self.ghost.move(self._panel_x(value), MARGIN)   # cheap: move a picture, not the window
+        else:
+            self._layout_children()
+
+    def _start_slide(self, target: float) -> None:
+        """Animate a snapshot of the panel; the real panel appears when it lands."""
+        self.anim.stop()
+        self._sliding = False
+        if self.progress <= 0:
+            self.progress = 0.0001          # switch the window to full size before sliding
+            self.setGeometry(self._full_rect())
         self._layout_children()
+        self.panel.ensurePolished()
+        if self.panel.layout() is not None:
+            self.panel.layout().activate()
+        snap = self._snapshot()
+        if not snap.isNull():
+            self.ghost.setPixmap(snap)
+            self.ghost.resize(self.panel.size())
+            self._sliding = True
+            self.panel.hide()
+            self.ghost.move(self._panel_x(self.progress), MARGIN)
+            self.ghost.show()
+            self.ghost.raise_()
+            self.strip.raise_()
+        self.anim.setStartValue(self.progress)
+        self.anim.setEndValue(target)
+        self.anim.start()
+
+    def _snapshot(self) -> QPixmap:
+        """Picture of the panel with transparent rounded corners."""
+        dpr = self.devicePixelRatioF()
+        size = self.panel.size()
+        pix = QPixmap(max(1, round(size.width() * dpr)), max(1, round(size.height() * dpr)))
+        pix.setDevicePixelRatio(dpr)
+        pix.fill(Qt.transparent)
+        self.panel.render(pix, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)
+        return pix
 
     def reposition(self) -> None:
         self.anim.stop()
+        self._end_slide()
         self._set_progress(self._target)
 
     def expand(self, activate: bool = False) -> None:
@@ -925,10 +983,7 @@ class SidebarWindow(QWidget):
             self.show()
         if self._target != 1.0:
             self._target = 1.0
-            self.anim.stop()
-            self.anim.setStartValue(self.progress)
-            self.anim.setEndValue(1.0)
-            self.anim.start()
+            self._start_slide(1.0)
         self.raise_()
         if activate:
             self.activateWindow()
@@ -949,10 +1004,7 @@ class SidebarWindow(QWidget):
                 w.lock()
         if self._alerts:
             self.reshow_timer.start()
-        self.anim.stop()
-        self.anim.setStartValue(self.progress)
-        self.anim.setEndValue(0.0)
-        self.anim.start()
+        self._start_slide(0.0)
 
     def toggle(self) -> None:
         if self._target >= 1.0:
@@ -960,9 +1012,15 @@ class SidebarWindow(QWidget):
         else:
             self.expand(activate=True)
 
+    def _end_slide(self) -> None:
+        if self._sliding:
+            self._sliding = False
+            self.ghost.hide()
+            self.ghost.clear()
+
     def _anim_finished(self) -> None:
-        if self._target == 0.0:
-            self.panel.hide()
+        self._end_slide()
+        self._set_progress(self._target)
 
     def snap_to(self, global_pos: QPoint) -> None:
         scr = QGuiApplication.screenAt(global_pos) or self._screen()
