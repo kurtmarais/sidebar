@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
@@ -140,20 +140,12 @@ def main(argv: list[str] | None = None) -> int:
     server.listen(SERVER_NAME)
 
     app.setFont(_pick_font())
-    try:
-        winplatform.refresh_startup_entry()   # keep "Start with Windows" pointing at this copy
-    except OSError:
-        pass
     data_dir = args.data_dir or default_data_dir()
     _install_error_log(data_dir / "error.log")
     _log_launch(data_dir / "launch.log", args.startup)
     db = Database(data_dir / "sidebar.db")
-    try:
-        backup.auto_backup(db, data_dir / "backups")
-    except OSError:
-        pass
 
-    win = SidebarWindow(db, data_dir)
+    win = SidebarWindow(db, data_dir, defer_cards=True)
     win.tray = build_tray(app, win)
 
     def on_connection() -> None:
@@ -172,8 +164,20 @@ def main(argv: list[str] | None = None) -> int:
             updater.spawn_update(data_dir / "update.log", restart=restart)
 
     app.aboutToQuit.connect(on_quit)
-    win.show()
-    win.check_reminders()   # reminders that came due while the app was closed
+    win.show()                # cards load right after; reminders are checked once they have
+
+    def housekeeping() -> None:
+        """Not needed to show the sidebar, so done a few seconds after start-up."""
+        try:
+            winplatform.refresh_startup_entry()   # keep "Start with Windows" pointing at this copy
+        except OSError:
+            pass
+        try:
+            backup.auto_backup(db, data_dir / "backups")
+        except OSError:
+            pass
+
+    QTimer.singleShot(5000, housekeeping)
     return app.exec()
 
 

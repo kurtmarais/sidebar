@@ -273,10 +273,14 @@ class ChecklistRow(QWidget):
         self.body.edited.emit()
 
     def style_done(self) -> None:
+        done = self.check.isChecked()
         f = self.edit.font()
-        f.setStrikeOut(self.check.isChecked())
-        self.edit.setFont(f)
-        self.edit.setStyleSheet(f"color: {self.body.p.muted};" if self.check.isChecked() else "")
+        if f.strikeOut() != done:
+            f.setStrikeOut(done)
+            self.edit.setFont(f)
+        style = f"color: {self.body.p.muted};" if done else ""
+        if self.edit.styleSheet() != style:      # restyling is slow; skip when unchanged
+            self.edit.setStyleSheet(style)
 
     def enterEvent(self, e):  # noqa: N802
         self.remove.setVisible(True)
@@ -1086,8 +1090,10 @@ class CardWidget(QFrame):
     link_toggled = Signal(int)          # in "link notes" mode
     meta_changed = Signal(int)          # due date / reminder / link changed
 
-    def __init__(self, card: Card, env: CardEnv):
-        super().__init__()
+    def __init__(self, card: Card, env: CardEnv, parent: QWidget | None = None):
+        super().__init__(parent)          # created in place: re-parenting later restyles every child
+        if parent is not None:
+            self.hide()
         self.card = card
         self.env = env
         self._pending: dict = {}

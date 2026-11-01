@@ -70,7 +70,8 @@ class CardList(QWidget):
             self.order.insert(0, w.card.id)
         else:
             self.order.append(w.card.id)
-        w.setParent(self)
+        if w.parentWidget() is not self:
+            w.setParent(self)
         w.hide()
 
     def replace(self, card_id: int, new: CardWidget) -> None:

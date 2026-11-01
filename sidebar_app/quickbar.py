@@ -21,12 +21,25 @@ DEFAULT_SOUND_URL = "https://www.youtube.com/watch?v=co7KgV2edvI"
 DEFAULT_SOUND_NAME = "Airplane cabin"
 DEFAULT_APP_NAME = "caffeine64.exe"
 
-try:  # Embedded playback needs Qt WebEngine (installed with PySide6 on Windows).
-    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
-    from PySide6.QtWebEngineWidgets import QWebEngineView
-    HAVE_WEBENGINE = True
-except ImportError:  # pragma: no cover - depends on the installed wheels
-    HAVE_WEBENGINE = False
+_webengine = None   # loaded on first play: it is a very large library and slows start-up
+
+
+def webengine():
+    """The Qt WebEngine classes, imported on first use; None if not installed."""
+    global _webengine
+    if _webengine is None:
+        try:
+            from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
+            from PySide6.QtWebEngineWidgets import QWebEngineView
+            _webengine = (QWebEngineView, QWebEnginePage, QWebEngineProfile, QWebEngineSettings)
+        except ImportError:  # pragma: no cover - depends on the installed wheels
+            _webengine = False
+    return _webengine or None
+
+
+def have_webengine() -> bool:
+    from importlib.util import find_spec
+    return find_spec("PySide6.QtWebEngineWidgets") is not None
 
 
 def youtube_id(url: str) -> str | None:
@@ -195,10 +208,12 @@ class FocusSoundTile(Tile):
         if not vid:
             self.status.setText("Invalid YouTube link")
             return
-        if not HAVE_WEBENGINE or self._get("focus_sound_browser"):
+        engine = None if self._get("focus_sound_browser") else webengine()
+        if engine is None:
             self.open_in_browser()
             return
         if self.view is None:
+            QWebEngineView, QWebEnginePage, QWebEngineProfile, QWebEngineSettings = engine
             self.view = QWebEngineView()
             # Off-the-record profile: YouTube cookies and history are never written to disk.
             self._profile = QWebEngineProfile(self.view)
@@ -228,8 +243,8 @@ class FocusSoundTile(Tile):
         m.addAction("Open in browser now", self.open_in_browser)
         always = m.addAction("Always open in browser")
         always.setCheckable(True)
-        always.setChecked(bool(self._get("focus_sound_browser")) or not HAVE_WEBENGINE)
-        always.setEnabled(HAVE_WEBENGINE)
+        always.setChecked(bool(self._get("focus_sound_browser")) or not have_webengine())
+        always.setEnabled(have_webengine())
         always.toggled.connect(lambda on: (self.stop(), self._put("focus_sound_browser", on)))
         m.addSeparator()
         m.addAction("Change video…", self.change_video)

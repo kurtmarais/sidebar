@@ -143,7 +143,7 @@ class Header(QWidget):
 
 
 class SidebarWindow(QWidget):
-    def __init__(self, db: Database, data_dir: Path):
+    def __init__(self, db: Database, data_dir: Path, defer_cards: bool = False):
         super().__init__(None)
         self.db = db
         self.data_dir = data_dir
@@ -163,6 +163,9 @@ class SidebarWindow(QWidget):
         self.tray = None
         self._stale: set[int] = set()        # cards changed on the phone while being edited here
         self._sync_text = ""
+        self._defer_cards = defer_cards
+        self._loading = False
+        self._pending_cards: list[Card] = []
         self.restart_after_update = False
 
         self.setWindowTitle("Sidebar")
@@ -184,6 +187,9 @@ class SidebarWindow(QWidget):
         self.strip.drag_finished.connect(lambda: self.db.set_setting("strip_position", self.s["strip_position"]))
         self.panel = QFrame(self)
         self.panel.setObjectName("panel")
+        # Style first: widgets created afterwards are styled once, instead of
+        # every card being restyled when the sheet is applied at the end.
+        QApplication.instance().setStyleSheet(stylesheet(self.p))
         self._build_panel()
         self.ghost = QLabel(self)              # snapshot of the panel used while sliding
         self.ghost.setAttribute(Qt.WA_TransparentForMouseEvents)
@@ -227,7 +233,7 @@ class SidebarWindow(QWidget):
         self.syncer.status_changed.connect(self._sync_status)
         self._sync_text = last_sync_text(db) if self.syncer.enabled() else ""
         self.load_cards()
-        self.apply_theme()
+        self.apply_theme(restyle=False)     # cards are already themed as they are built
         self._update_context_timer()
         self.reposition()
 
@@ -374,13 +380,36 @@ class SidebarWindow(QWidget):
 
     # ============================================================== cards
     def load_cards(self) -> None:
+        if self._defer_cards:
+            # Start-up: show the strip straight away and build the cards in small
+            # batches between events (the panel starts closed anyway).
+            self._loading = True
+            self._pending_cards = self.db.cards()
+            self._rebuild_tabs()
+            self.set_view(VIEW_CARDS)
+            QTimer.singleShot(0, self._load_next_batch)
+            return
         for card in self.db.cards():
             self.list.add(self._make_widget(card), at_top=False)
         self._rebuild_tabs()
         self.set_view(VIEW_CARDS)
 
+    def _load_next_batch(self) -> None:
+        batch, self._pending_cards = self._pending_cards[:12], self._pending_cards[12:]
+        for card in batch:
+            if card.id not in self.list.widgets:
+                self.list.add(self._make_widget(card), at_top=False)
+        if self._pending_cards:
+            QTimer.singleShot(0, self._load_next_batch)
+            return
+        self._loading = False
+        self.list.order = [c.id for c in self.db.cards() if c.id in self.list.widgets]
+        self.refresh()
+        self._apply_stale()           # phone changes that arrived while loading
+        self.check_reminders()        # reminders that came due while the app was closed
+
     def _make_widget(self, card: Card) -> CardWidget:
-        w = CardWidget(card, self.env)
+        w = CardWidget(card, self.env, self.list)
         w.save_requested.connect(self._save_card)
         w.delete_requested.connect(self.delete_card)
         w.archive_requested.connect(self.archive_card)
@@ -417,6 +446,8 @@ class SidebarWindow(QWidget):
         """Show edits that arrived from the phone. A card you are typing in is left
         alone and refreshed once you leave it (your newer edit then wins anyway)."""
         self._stale |= set(changed)
+        if self._loading:
+            return                    # applied once all cards are built
         if boards_changed:
             valid = {b.id for b in self.db.boards()}
             current = self.tabs.board_id(self.tabs.currentIndex()) if self.tabs.count() else 0
@@ -1326,10 +1357,11 @@ class SidebarWindow(QWidget):
             backup.export_markdown(self.db, Path(path))
 
     # ================================================================ theme
-    def apply_theme(self) -> None:
+    def apply_theme(self, restyle: bool = True) -> None:
         self.p = palette(self.s["theme"])
         self.env.p = self.p
-        QApplication.instance().setStyleSheet(stylesheet(self.p))
+        if restyle:
+            QApplication.instance().setStyleSheet(stylesheet(self.p))
         self.title_label.setText(self.s["title"])
         for b in (self.pin_btn, self.menu_btn, self.add_board_btn):
             retint(b, self.p)
@@ -1339,8 +1371,9 @@ class SidebarWindow(QWidget):
         self.list.set_indicator_color(self.p.accent)
         self.quickbar.apply_theme(self.p)
         self.quickbar.setVisible(bool(self.s["show_quickbar"]))
-        for w in self.list.widgets.values():
-            w.apply_theme()
+        if restyle:
+            for w in self.list.widgets.values():
+                w.apply_theme()
         self.strip.update()
 
     def _apply_flags(self) -> None:

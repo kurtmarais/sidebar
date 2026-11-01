@@ -8,6 +8,7 @@ edge strip.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
@@ -204,8 +205,10 @@ def stylesheet(p: Palette) -> str:
 
 
 # ------------------------------------------------------------------- icons
+@lru_cache(maxsize=512)
 def make_icon(name: str, color: str, size: int = 16) -> QIcon:
-    """Line icons drawn with QPainter so they look identical everywhere."""
+    """Line icons drawn with QPainter so they look identical everywhere.
+    Cached: the same few icons and colours are used by every card."""
     icon = QIcon()
     for scale in (1, 2):
         icon.addPixmap(_draw(name, QColor(color), size, scale))

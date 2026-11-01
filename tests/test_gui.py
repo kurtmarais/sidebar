@@ -302,3 +302,43 @@ def test_settings_cancel_changes_nothing(app, win, monkeypatch):
     before = win.db.settings()["title"]
     win.open_settings()
     assert win.db.settings()["title"] == before and win.title_label.text() == before
+
+
+def test_deferred_card_loading_at_startup(app, tmp_path):
+    """Start-up shows the window before building cards, then loads them all in
+    order and only then checks reminders."""
+    db = Database(tmp_path / "d.db")
+    b = db.boards()[0].id
+    for i in range(30):
+        db.add_card(b, "note", title=f"n{i}")
+    due = db.add_card(b, "note", title="due now")
+    db.update_card(due.id, remind_at=time.time() - 5)
+    w = SidebarWindow(db, tmp_path, defer_cards=True)
+    w.show()
+    assert len(w.list.widgets) < 32                 # not all built yet: start-up didn't wait
+    for _ in range(200):
+        app.processEvents()
+        if not w._loading:
+            break
+    assert not w._loading and len(w.list.widgets) == 32
+    assert [c.title for c in db.cards()] == [x.card.title for x in w.list.displayed]
+    assert w._alerts == [due.id]                    # reminder fired once cards were loaded
+    w.shutdown()
+    w.close()
+
+
+def test_focus_sound_engine_loads_on_first_play(app, monkeypatch):
+    import sys
+    from sidebar_app import quickbar
+    store = {}
+    bar = quickbar.QuickBar(DARK_PALETTE(), store.get, store.__setitem__)
+    assert "PySide6.QtWebEngineWidgets" not in sys.modules or quickbar._webengine is not None
+    bar.sound.play()
+    assert bar.sound.playing and bar.sound.view is not None
+    bar.sound.stop()
+    bar.shutdown()
+
+
+def DARK_PALETTE():
+    from sidebar_app.theme import DARK
+    return DARK
