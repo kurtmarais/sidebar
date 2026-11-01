@@ -15,7 +15,10 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+# Card types that sync to the phone (Supabase). Images, files and secrets stay on the PC.
+SYNC_TYPES = ("note", "checklist", "code", "links")
 
 CARD_TYPES = ("note", "checklist", "code", "links", "image", "file", "secret")
 
@@ -54,6 +57,7 @@ class Board:
     id: int
     name: str
     position: int
+    uid: str = ""
 
 
 @dataclass
@@ -196,6 +200,31 @@ class Database:
                     );
                     """
                 )
+                self.conn.execute("PRAGMA user_version = 1")
+            version = 1
+        if version < 2:
+            # Sync support: stable board ids, change tracking and delete markers.
+            with self.conn:
+                self.conn.executescript(
+                    """
+                    ALTER TABLE boards ADD COLUMN uid TEXT;
+                    ALTER TABLE boards ADD COLUMN updated_at REAL NOT NULL DEFAULT 0;
+                    ALTER TABLE boards ADD COLUMN dirty INTEGER NOT NULL DEFAULT 1;
+                    ALTER TABLE boards ADD COLUMN pushed INTEGER NOT NULL DEFAULT 0;
+                    ALTER TABLE cards ADD COLUMN dirty INTEGER NOT NULL DEFAULT 1;
+                    ALTER TABLE cards ADD COLUMN pushed INTEGER NOT NULL DEFAULT 0;
+                    CREATE TABLE IF NOT EXISTS tombstones (
+                        kind TEXT NOT NULL,
+                        uid TEXT NOT NULL,
+                        deleted_at REAL NOT NULL,
+                        PRIMARY KEY (kind, uid)
+                    );
+                    """
+                )
+                for (bid,) in self.conn.execute("SELECT id FROM boards WHERE uid IS NULL").fetchall():
+                    self.conn.execute("UPDATE boards SET uid = ?, updated_at = ? WHERE id = ?",
+                                      (uuid.uuid4().hex, time.time(), bid))
+                self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_boards_uid ON boards(uid)")
                 self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def _seed(self) -> None:
@@ -252,30 +281,43 @@ class Database:
 
     # ----------------------------------------------------------------- boards
     def boards(self) -> list[Board]:
-        rows = self.conn.execute("SELECT id, name, position FROM boards ORDER BY position, id")
-        return [Board(r["id"], r["name"], r["position"]) for r in rows]
+        rows = self.conn.execute("SELECT id, name, position, uid FROM boards ORDER BY position, id")
+        return [Board(r["id"], r["name"], r["position"], r["uid"] or "") for r in rows]
 
     def add_board(self, name: str) -> Board:
         pos = self.conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM boards").fetchone()[0]
+        uid = uuid.uuid4().hex
         with self.conn:
-            cur = self.conn.execute("INSERT INTO boards(name, position) VALUES(?, ?)", (name, pos))
-        return Board(cur.lastrowid, name, pos)
+            cur = self.conn.execute(
+                "INSERT INTO boards(name, position, uid, updated_at, dirty) VALUES(?, ?, ?, ?, 1)",
+                (name, pos, uid, time.time()))
+        return Board(cur.lastrowid, name, pos, uid)
 
     def rename_board(self, board_id: int, name: str) -> None:
         with self.conn:
-            self.conn.execute("UPDATE boards SET name = ? WHERE id = ?", (name, board_id))
+            self.conn.execute("UPDATE boards SET name = ?, updated_at = ?, dirty = 1 WHERE id = ?",
+                              (name, time.time(), board_id))
 
     def delete_board(self, board_id: int) -> None:
         """Delete a category and its cards. The last remaining one is kept."""
         if len(self.boards()) <= 1:
             raise ValueError("At least one category must remain")
+        now = time.time()
         with self.conn:
+            row = self.conn.execute("SELECT uid FROM boards WHERE id = ?", (board_id,)).fetchone()
+            if row and row["uid"]:
+                self._tombstone("board", row["uid"], now)
+            for c in self.conn.execute("SELECT uid, type FROM cards WHERE board_id = ?", (board_id,)).fetchall():
+                if c["type"] in SYNC_TYPES:
+                    self._tombstone("card", c["uid"], now)
             self.conn.execute("DELETE FROM boards WHERE id = ?", (board_id,))
 
     def set_board_order(self, board_ids: Iterable[int]) -> None:
+        now = time.time()
         with self.conn:
             for pos, bid in enumerate(board_ids):
-                self.conn.execute("UPDATE boards SET position = ? WHERE id = ?", (pos, bid))
+                self.conn.execute("UPDATE boards SET position = ?, updated_at = ?, dirty = 1 "
+                                  "WHERE id = ? AND position != ?", (pos, now, bid, pos))
 
     # ------------------------------------------------------------------ cards
     def cards(self) -> list[Card]:
@@ -323,6 +365,7 @@ class Database:
             if flag in fields:
                 fields[flag] = int(bool(fields[flag]))
         fields["updated_at"] = time.time()
+        fields["dirty"] = 1
         cols = ", ".join(f"{k} = ?" for k in fields)
         with self.conn:
             self.conn.execute(f"UPDATE cards SET {cols} WHERE id = ?", (*fields.values(), card_id))
@@ -333,12 +376,133 @@ class Database:
 
     def delete_card(self, card_id: int) -> None:
         with self.conn:
+            row = self.conn.execute("SELECT uid, type FROM cards WHERE id = ?", (card_id,)).fetchone()
+            if row and row["type"] in SYNC_TYPES:
+                self._tombstone("card", row["uid"], time.time())
             self.conn.execute("DELETE FROM cards WHERE id = ?", (card_id,))
 
     def set_card_order(self, card_ids: Iterable[int]) -> None:
+        now = time.time()
         with self.conn:
             for pos, cid in enumerate(card_ids):
-                self.conn.execute("UPDATE cards SET position = ? WHERE id = ?", (pos, cid))
+                self.conn.execute("UPDATE cards SET position = ?, updated_at = ?, dirty = 1 "
+                                  "WHERE id = ? AND position != ?", (pos, now, cid, pos))
+
+    # -------------------------------------------------------------------- sync
+    def _tombstone(self, kind: str, uid: str, when: float) -> None:
+        self.conn.execute("INSERT OR REPLACE INTO tombstones(kind, uid, deleted_at) VALUES(?, ?, ?)",
+                          (kind, uid, when))
+
+    def dirty_boards(self) -> list[dict]:
+        rows = self.conn.execute("SELECT uid, name, position, updated_at, pushed FROM boards WHERE dirty = 1")
+        return [dict(r) for r in rows]
+
+    def dirty_cards(self) -> list[dict]:
+        marks = ", ".join("?" for _ in SYNC_TYPES)
+        rows = self.conn.execute(
+            f"SELECT c.*, b.uid AS board_uid FROM cards c JOIN boards b ON b.id = c.board_id "
+            f"WHERE c.dirty = 1 AND c.type IN ({marks})", SYNC_TYPES).fetchall()
+        out = []
+        for r in rows:
+            d = {k: r[k] for k in r.keys() if k not in ("id", "board_id", "dirty", "pushed")}
+            try:
+                d["content"] = json.loads(d["content"] or "{}")
+            except json.JSONDecodeError:
+                d["content"] = {}
+            d["collapsed"] = bool(d["collapsed"])
+            d["archived"] = bool(d["archived"])
+            out.append(d)
+        return out
+
+    def tombstones(self) -> list[dict]:
+        return [dict(r) for r in self.conn.execute("SELECT kind, uid, deleted_at FROM tombstones")]
+
+    def mark_pushed(self, boards: list[dict], cards: list[dict], tombs: list[dict]) -> None:
+        """Clear change flags for rows that were uploaded and not edited since."""
+        with self.conn:
+            for b in boards:
+                self.conn.execute("UPDATE boards SET dirty = 0, pushed = 1 WHERE uid = ? AND updated_at = ?",
+                                  (b["uid"], b["updated_at"]))
+            for c in cards:
+                self.conn.execute("UPDATE cards SET dirty = 0, pushed = 1 WHERE uid = ? AND updated_at = ?",
+                                  (c["uid"], c["updated_at"]))
+            for t in tombs:
+                self.conn.execute("DELETE FROM tombstones WHERE kind = ? AND uid = ? AND deleted_at = ?",
+                                  (t["kind"], t["uid"], t["deleted_at"]))
+
+    def mark_all_dirty(self) -> None:
+        """Re-upload everything (first sign-in, or a new Supabase project)."""
+        with self.conn:
+            self.conn.execute("UPDATE boards SET dirty = 1, pushed = 0")
+            self.conn.execute("UPDATE cards SET dirty = 1, pushed = 0")
+
+    def board_uids(self) -> list[str]:
+        return [r[0] for r in self.conn.execute("SELECT uid FROM boards")]
+
+    def rekey_board(self, old_uid: str, new_uid: str) -> None:
+        """A local category was matched to an existing cloud one: take its id."""
+        with self.conn:
+            self.conn.execute("UPDATE boards SET uid = ?, pushed = 1, dirty = 0 WHERE uid = ?", (new_uid, old_uid))
+
+    def apply_remote_board(self, r: dict) -> bool:
+        """Merge a board from the server (newest edit wins). Returns True if changed."""
+        local = self.conn.execute("SELECT * FROM boards WHERE uid = ?", (r["uid"],)).fetchone()
+        if r.get("deleted"):
+            if local is None or (local["dirty"] and local["updated_at"] > r["updated_at"]):
+                return False
+            if self.conn.execute("SELECT COUNT(*) FROM boards").fetchone()[0] <= 1:
+                return False                      # never remove the last category
+            with self.conn:
+                self.conn.execute("DELETE FROM boards WHERE id = ?", (local["id"],))
+            return True
+        with self.conn:
+            if local is None:
+                self.conn.execute(
+                    "INSERT INTO boards(name, position, uid, updated_at, dirty, pushed) VALUES(?, ?, ?, ?, 0, 1)",
+                    (r["name"], r.get("position", 0), r["uid"], r["updated_at"]))
+                return True
+            if r["updated_at"] > local["updated_at"]:
+                self.conn.execute("UPDATE boards SET name = ?, position = ?, updated_at = ?, dirty = 0, pushed = 1 "
+                                  "WHERE id = ?", (r["name"], r.get("position", 0), r["updated_at"], local["id"]))
+                return True
+        return False
+
+    def apply_remote_card(self, r: dict) -> int | None:
+        """Merge a card from the server (newest edit wins). Returns the local id it
+        affects (inserted, updated or deleted), or None if nothing changed."""
+        local = self.conn.execute("SELECT * FROM cards WHERE uid = ?", (r["uid"],)).fetchone()
+        if r.get("deleted"):
+            if local is None or (local["dirty"] and local["updated_at"] > r["updated_at"]):
+                return None
+            with self.conn:
+                self.conn.execute("DELETE FROM cards WHERE id = ?", (local["id"],))
+            return local["id"]
+        if r.get("type") not in SYNC_TYPES:
+            return None
+        if local is not None and r["updated_at"] <= local["updated_at"]:
+            return None
+        board = self.conn.execute("SELECT id FROM boards WHERE uid = ?", (r.get("board_uid"),)).fetchone()
+        board_id = board["id"] if board else self.boards()[0].id
+        values = (
+            board_id, r["type"], r.get("title") or "", r.get("color") or "yellow",
+            json.dumps(r.get("content") or {}), r.get("position", 0), int(bool(r.get("collapsed"))),
+            int(r.get("priority") or 0), r.get("due_date"), r.get("remind_at"), int(bool(r.get("archived"))),
+            r.get("archived_at"), r.get("link_app") or "", r.get("link_title") or "", r["updated_at"],
+        )
+        with self.conn:
+            if local is None:
+                cur = self.conn.execute(
+                    "INSERT INTO cards(board_id, type, title, color, content, position, collapsed, priority, "
+                    "due_date, remind_at, archived, archived_at, link_app, link_title, updated_at, "
+                    "uid, created_at, dirty, pushed) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)",
+                    (*values, r["uid"], r.get("created_at") or r["updated_at"]))
+                return cur.lastrowid
+            self.conn.execute(
+                "UPDATE cards SET board_id = ?, type = ?, title = ?, color = ?, content = ?, position = ?, "
+                "collapsed = ?, priority = ?, due_date = ?, remind_at = ?, archived = ?, archived_at = ?, "
+                "link_app = ?, link_title = ?, updated_at = ?, dirty = 0, pushed = 1 WHERE id = ?",
+                (*values, local["id"]))
+            return local["id"]
 
     def due_reminders(self, now: float | None = None) -> list[Card]:
         now = time.time() if now is None else now

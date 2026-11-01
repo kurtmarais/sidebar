@@ -33,6 +33,7 @@ from PySide6.QtGui import QDesktopServices
 from . import backup, dialogs, updater, winplatform
 from .cardlist import VIEW_ARCHIVE, VIEW_CARDS, VIEW_TODAY, BoardTabBar, CardList, today_section
 from .quickbar import QuickBar
+from .sync_qt import SyncController, SyncDialog, last_sync_text
 from .cards import (
     CARD_KINDS, EXTENSION_LANGUAGES, CardEnv, CardWidget, confirm, icon_button, retint,
     tomorrow_at_nine,
@@ -160,6 +161,8 @@ class SidebarWindow(QWidget):
         self._offered_meetings: set[str] = set()
         self._focus_end: float | None = None
         self.tray = None
+        self._stale: set[int] = set()        # cards changed on the phone while being edited here
+        self._sync_text = ""
         self.restart_after_update = False
 
         self.setWindowTitle("Sidebar")
@@ -219,6 +222,10 @@ class SidebarWindow(QWidget):
             scr.availableGeometryChanged.connect(lambda _g: self.reposition())
 
         dialogs.set_placer(self.place_beside)
+        self.syncer = SyncController(db, self)
+        self.syncer.applied.connect(self.apply_remote_changes)
+        self.syncer.status_changed.connect(self._sync_status)
+        self._sync_text = last_sync_text(db) if self.syncer.enabled() else ""
         self.load_cards()
         self.apply_theme()
         self._update_context_timer()
@@ -328,7 +335,7 @@ class SidebarWindow(QWidget):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.list = CardList(self.scroll)
-        self.list.order_changed.connect(self.db.set_card_order)
+        self.list.order_changed.connect(lambda ids: (self.db.set_card_order(ids), self._local_change()))
         self.scroll.setWidget(self.list)
         lay.addWidget(self.scroll, 1)
 
@@ -384,6 +391,57 @@ class SidebarWindow(QWidget):
 
     def _save_card(self, card_id: int, fields: dict) -> None:
         self.db.update_card(card_id, **fields)
+        self._local_change()
+
+    def _local_change(self) -> None:
+        self.syncer.local_change()
+
+    # ------------------------------------------------------- phone sync
+    def _sync_status(self, text: str, detail: str) -> None:
+        self._sync_text = text
+        self.count_label.setToolTip(detail)
+        self.refresh_count()
+
+    def open_sync(self) -> None:
+        self.expand(activate=True)
+        dialogs.run(SyncDialog(self, self.db, self.syncer, lambda: self._sync_status(
+            last_sync_text(self.db) if self.syncer.enabled() else "", "")))
+        # Signing in may have downloaded notes from the phone: show everything fresh.
+        self.apply_remote_changes({c.id for c in self.db.cards()} | set(self.list.widgets), True)
+
+    def _editing(self, w: CardWidget) -> bool:
+        focus = QApplication.focusWidget()
+        return w._save_timer.isActive() or (focus is not None and w.isAncestorOf(focus))
+
+    def apply_remote_changes(self, changed: set, boards_changed: bool) -> None:
+        """Show edits that arrived from the phone. A card you are typing in is left
+        alone and refreshed once you leave it (your newer edit then wins anyway)."""
+        self._stale |= set(changed)
+        if boards_changed:
+            valid = {b.id for b in self.db.boards()}
+            current = self.tabs.board_id(self.tabs.currentIndex()) if self.tabs.count() else 0
+            self._rebuild_tabs(select_board=current if current in valid else 0)
+            self._stale |= {cid for cid in self.list.widgets if self.db.card(cid) is None}
+        self._apply_stale()
+
+    def _apply_stale(self) -> None:
+        if not self._stale:
+            return
+        for cid in list(self._stale):
+            w = self.list.widgets.get(cid)
+            if w is not None and self._editing(w):
+                continue
+            self._stale.discard(cid)
+            card = self.db.card(cid)
+            if card is None:
+                if w is not None:
+                    self.list.remove(cid)
+            elif w is None:
+                self.list.add(self._make_widget(card))
+            else:
+                self.list.replace(cid, self._make_widget(card))
+        self.list.order = [c.id for c in self.db.cards() if c.id in self.list.widgets]
+        self.refresh()
 
     def _target_board(self) -> int:
         bid = self.tabs.board_id(self.tabs.currentIndex()) if self.tabs.count() else 0
@@ -391,6 +449,7 @@ class SidebarWindow(QWidget):
 
     def add_card(self, type_: str, focus: bool = True, **kwargs) -> CardWidget:
         card = self.db.add_card(self._target_board(), type_, **kwargs)
+        self._local_change()
         w = self._make_widget(card)
         self.list.add(w, at_top=True)
         if self.list.view != VIEW_CARDS:
@@ -418,6 +477,7 @@ class SidebarWindow(QWidget):
             return
         asset = w.card.content.get("asset") if w.card.type == "image" else None
         self.db.delete_card(card_id)
+        self._local_change()
         self.list.remove(card_id)
         if asset:
             try:
@@ -432,6 +492,7 @@ class SidebarWindow(QWidget):
             return
         w.flush()
         self.db.archive_card(card_id, archived)
+        self._local_change()
         w.card.archived = archived
         w.card.archived_at = time.time() if archived else None
         if card_id in self._alerts and archived:
@@ -446,6 +507,7 @@ class SidebarWindow(QWidget):
         if w is None or w.card.board_id == board_id:
             return
         self.db.update_card(card_id, board_id=board_id)
+        self._local_change()
         w.card.board_id = board_id
         self.refresh()
 
@@ -550,10 +612,18 @@ class SidebarWindow(QWidget):
         self.list.board_id = self.tabs.board_id(self.tabs.currentIndex()) if self.tabs.count() else 0
         self.list.context = self._context if self._follow_enabled() else None
         n = self.list.refresh()
-        noun = {VIEW_ARCHIVE: "archived", VIEW_TODAY: "for today"}.get(self.list.view, "")
-        self.count_label.setText(f"{n} note{'s' if n != 1 else ''} {noun}".strip())
+        self._shown = n
+        self.refresh_count()
         self._update_today_count()
         self._update_context_row()
+
+    def refresh_count(self) -> None:
+        n = getattr(self, "_shown", 0)
+        noun = {VIEW_ARCHIVE: "archived", VIEW_TODAY: "for today"}.get(self.list.view, "")
+        text = f"{n} note{'s' if n != 1 else ''} {noun}".strip()
+        if self._sync_text:
+            text += f"  ·  {self._sync_text}"
+        self.count_label.setText(text)
 
     def _update_today_count(self) -> None:
         today, now = datetime.now().date(), datetime.now()
@@ -587,6 +657,7 @@ class SidebarWindow(QWidget):
         name = dialogs.ask_text(self, "New category", "Category name:")
         if name:
             b = self.db.add_board(name)
+            self._local_change()
             self._rebuild_tabs(select_board=b.id)
             self._tab_changed(self.tabs.currentIndex())
 
@@ -612,6 +683,7 @@ class SidebarWindow(QWidget):
         name = dialogs.ask_text(self, "Rename category", "Category name:", old)
         if name:
             self.db.rename_board(bid, name)
+            self._local_change()
             self._rebuild_tabs(select_board=bid)
 
     def _move_board(self, bid: int, delta: int) -> None:
@@ -619,6 +691,7 @@ class SidebarWindow(QWidget):
         i = ids.index(bid)
         ids.insert(i + delta, ids.pop(i))
         self.db.set_board_order(ids)
+        self._local_change()
         self._rebuild_tabs(select_board=bid)
 
     def _delete_board(self, bid: int, name: str) -> None:
@@ -627,6 +700,7 @@ class SidebarWindow(QWidget):
                        f"Delete “{name}” and its {n} note{'s' if n != 1 else ''}? This cannot be undone."):
             return
         self.db.delete_board(bid)
+        self._local_change()
         for cid in [c for c, w in self.list.widgets.items() if w.card.board_id == bid]:
             self.list.remove(cid)
         self._rebuild_tabs(select_board=0)
@@ -1013,6 +1087,7 @@ class SidebarWindow(QWidget):
         if self._target != 1.0:
             self._target = 1.0
             self._start_slide(1.0)
+            self.syncer.sync_soon()          # pick up phone edits when opening
         self.raise_()
         if activate:
             self.activateWindow()
@@ -1034,6 +1109,7 @@ class SidebarWindow(QWidget):
         if self._alerts:
             self.reshow_timer.start()
         self._start_slide(0.0)
+        QTimer.singleShot(ANIM_MS + 50, self._apply_stale)
 
     def toggle(self) -> None:
         if self._target >= 1.0:
@@ -1143,6 +1219,8 @@ class SidebarWindow(QWidget):
                         self.start_focus)
         else:
             m.addAction(make_icon("focus", self.p.muted), "Stop focus session", self.stop_focus)
+        m.addSeparator()
+        m.addAction("Phone sync…", self.open_sync)
         m.addSeparator()
         m.addAction("Export backup…", self.export_backup)
         m.addAction("Restore backup…", self.restore_backup)
@@ -1305,6 +1383,7 @@ class SidebarWindow(QWidget):
         self.quickbar.shutdown()
         for w in self.list.widgets.values():
             w.flush()
+        self.syncer.shutdown()                # upload the last edits before closing
         if self._hotkey_hwnd is not None:
             winplatform.unregister_hotkey(self._hotkey_hwnd)
             self._hotkey_hwnd = None

@@ -73,6 +73,19 @@ class CardList(QWidget):
         w.setParent(self)
         w.hide()
 
+    def replace(self, card_id: int, new: CardWidget) -> None:
+        """Swap in a rebuilt widget (after a change arrived from the phone)."""
+        old = self.widgets.get(card_id)
+        self.widgets[card_id] = new
+        new.setParent(self)
+        new.hide()
+        if old is not None:
+            if old in self.displayed:
+                self.displayed[self.displayed.index(old)] = new
+            self.lay.removeWidget(old)
+            old.hide()
+            old.deleteLater()
+
     def remove(self, card_id: int) -> None:
         w = self.widgets.pop(card_id, None)
         if card_id in self.order:

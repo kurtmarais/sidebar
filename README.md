@@ -57,6 +57,8 @@ Dropping `.py`, `.js`, `.sql`, `.json` or `.txt` files creates a Code card.
 
 **Settings** (gear icon): side, monitor, panel width, dark or light theme, open by hover and/or click, open delay, strip length, focus length, keep on top, Ctrl+Shift+S, notes that follow your window, meeting notes, and **Start with Windows**. Start with Windows is also what keeps reminders working, since the app must be running to alert you.
 
+**Phone sync** (optional): edit your notes, checklists, code and links cards from your phone through your own Supabase project. It works while the PC is off. Set it up with [docs/phone-sync.md](docs/phone-sync.md), then turn it on under gear → **Phone sync…**.
+
 ## Keyboard
 
 | Keys | Action |
@@ -135,6 +137,10 @@ sidebar_app/
   secrets_store.py PIN-protected encryption for secret notes
   quickbar.py      focus-sound and app-launcher tiles
   updater.py       git pull on close / "Update and restart"
+  sync.py          Supabase sync engine (newest edit wins, per card)
+  sync_qt.py       background sync and the Phone sync dialog
+supabase/migrations/ database tables and access rules for Supabase
+web/               the phone app (static files: deploy the folder as-is)
   winplatform.py   Windows APIs: startup entry, hotkey, front window, DPAPI, meeting detection
   dialogs.py       settings and date pickers
   theme.py         colours, stylesheet, drawn icons
