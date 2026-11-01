@@ -374,6 +374,20 @@ def _draw(name: str, color: QColor, size: int, scale: int) -> QPixmap:
         path.arcTo(ring, 120, 300)
         p.drawPath(path)
         _poly(p, S(0.5, 0.12), S(0.5, 0.46))
+    elif name in ("star", "star_filled"):
+        import math
+        pts = []
+        for i in range(10):
+            r = 0.42 if i % 2 == 0 else 0.18
+            a = math.radians(-90 + i * 36)
+            pts.append((0.5 + r * math.cos(a), 0.53 + r * math.sin(a)))
+        path = QPainterPath(QPointF(*S(*pts[0])))
+        for pt in pts[1:]:
+            path.lineTo(QPointF(*S(*pt)))
+        path.closeSubpath()
+        if name == "star_filled":
+            p.setBrush(color)
+        p.drawPath(path)
     elif name == "secret":
         return _draw("lock", color, size, scale)
     p.end()

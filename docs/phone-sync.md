@@ -65,13 +65,17 @@ Every push to that branch redeploys the app automatically.
 
 ## Using the phone app
 
-- Tap a card to edit it. **Done** saves it.
-- Tick checklist items straight from the list.
-- **+** creates a note, checklist, code or links card.
-- **Notes**, **Today** and **Archive** work as they do on the desktop.
-- Long-press a category to rename or delete it. **+** at the end of the categories adds one.
+- Tap a card to open it. **‹ Back** (top left) and **Done** (top right) both close it; your changes save as you type. A new note you leave empty is dropped.
+- **Swipe a card right all the way** to archive it (in Archive: to restore it). **Swipe left all the way** to star or unstar it. A partial swipe springs back and does nothing.
+- **Press and hold a card, then drag** to change the order (Notes view, when not searching).
+- Starred cards have a gold outline and ★. The sidebar on the PC shows the star too, and has **Star / Unstar** in the card menu.
+- Delete a note from inside it: **Delete note** at the bottom.
+- Tick checklist items straight from the list. **+** creates a note, checklist, code or links card.
+- **Notes**, **Today** and **Archive** work as on the desktop. Long-press a category to rename or delete it; **+** at the end of the categories adds one.
 - Edits made offline are kept on the phone and upload when you're back online.
-- **Sign out** removes the notes stored on the phone. They stay in Supabase and on the PC.
+- **Sign out** removes the notes stored on the phone (they stay in Supabase and on the PC).
+
+**Stars need one database update (once):** in Supabase, **SQL Editor**, run the contents of [`supabase/migrations/20261102090000_starred.sql`](../supabase/migrations/20261102090000_starred.sql). Until then everything else syncs normally and stars just stay on the device where you set them.
 
 ## Privacy summary
 

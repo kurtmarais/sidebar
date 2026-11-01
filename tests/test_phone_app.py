@@ -70,3 +70,48 @@ def test_phone_and_desktop_round_trip(tmp_path):
         sync.sync_now(pc)
         assert by_title(pc, "From my phone") is None                          # deleted on the phone
         assert pc.card(g.id).archived                                         # archived on the phone
+
+
+GESTURES = Path(__file__).with_name("phone_gestures.js")
+
+
+@pytest.mark.parametrize("no_star_column", [False, True])
+def test_phone_gestures_and_editor(tmp_path, no_star_column):
+    import os
+    with FakeSupabase(static_dir=ROOT / "web") as server:
+        server.no_star_column = no_star_column
+        pc = Database(tmp_path / "pc.db")
+        sync.sign_in(pc, server.url, server.key, "me@example.com", "correct horse")
+        for c in pc.cards():
+            pc.delete_card(c.id)
+        work = pc.boards()[0].id
+        for title in ("Delta", "Gamma", "Beta", "Alpha"):          # newest first: Alpha on top
+            pc.add_card(work, "note", title=title, content={"text": f"{title} text"})
+        a = by_title(pc, "Alpha")
+        pc.update_card(a.id, priority=3)
+        sync.sync_now(pc)
+
+        proc = subprocess.run(["node", str(GESTURES), str(tmp_path / "profile"), server.url, server.key,
+                               os.environ.get("SHOT_DIR", "")], capture_output=True, text=True, timeout=180)
+        assert proc.returncode == 0, proc.stderr[-2000:]
+        out = json.loads(proc.stdout.strip().splitlines()[-1])
+        assert out["errors"] == [], out["errors"]
+        assert out["start"] == ["Alpha", "Beta", "Gamma", "Delta"]
+        assert out["tagsInline"] and not out["deleteInList"]
+        assert out["partialRight"] is True and "Alpha" not in out["afterFullRight"]
+        assert out["alphaArchived"] is True                      # full right swipe archived
+        assert out["betaAfterPartial"] is False                  # partial left swipe did nothing
+        assert out["betaStarred"] is True and out["starVisible"] == 1
+        assert out["reorder"]["after"] == ["Delta", "Beta", "Gamma"], out["reorder"]
+        assert out["afterScroll"] == out["reorder"]["after"]     # vertical move changed nothing
+        assert out["backLeft"] and out["doneRight"] and out["markDoneGone"] and out["deleteAtBottom"]
+        assert not out["datesOverlap"] and out["datesFit"]
+        assert out["emptyDropped"] and out["newKept"] and out["deleted"]
+        assert out["queueLeft"] == 0 and out["noStarColumn"] is no_star_column
+
+        sync.sync_now(pc)
+        assert pc.card(a.id).archived
+        assert by_title(pc, "Beta").starred is (not no_star_column)
+        titles = [c.title for c in pc.cards() if not c.archived]
+        assert titles == ["Delta", "Beta", "Gamma"]               # order from the phone
+        assert by_title(pc, "Packing") is None

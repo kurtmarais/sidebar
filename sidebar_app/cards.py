@@ -15,7 +15,7 @@ from typing import Callable
 
 from PySide6.QtCore import QDate, QDateTime, QMimeData, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
-    QColor, QDesktopServices, QDrag, QFont, QKeyEvent, QPainter,
+    QColor, QDesktopServices, QDrag, QFont, QKeyEvent, QPainter, QPen,
     QPainterPath, QPixmap, QSyntaxHighlighter, QTextCharFormat,
 )
 from PySide6.QtWidgets import (
@@ -1119,6 +1119,9 @@ class CardWidget(QFrame):
         self.toggle.clicked.connect(lambda: self.set_collapsed(not self.card.collapsed))
         self.type_icon = QLabel()
         self.type_icon.setFixedWidth(20)
+        self.star = QLabel()                 # shown only on starred cards
+        self.star.setFixedWidth(18)
+        self.star.setToolTip("Starred")
         self.title = QLineEdit(card.title)
         self.title.setObjectName("cardTitle")
         self.title.textEdited.connect(self._title_edited)
@@ -1136,7 +1139,7 @@ class CardWidget(QFrame):
         self.menu = QMenu(self)
         self.menu.aboutToShow.connect(self._build_menu)
         self.more.setMenu(self.menu)
-        for w in (self.grip, self.toggle, self.type_icon):
+        for w in (self.grip, self.toggle, self.type_icon, self.star):
             header.addWidget(w)
         header.addWidget(self.title, 1)
         for w in (self.done_btn, self.restore_btn, self.link_btn, self.more):
@@ -1271,6 +1274,8 @@ class CardWidget(QFrame):
             retint(btn, p)
         icon = CARD_KINDS[self.card.type][3]
         self.type_icon.setPixmap(make_icon(icon, card_accent(self.card.color), 15).pixmap(15, 15))
+        self.star.setPixmap(make_icon("star_filled", p.accent, 15).pixmap(15, 15))
+        self.star.setVisible(self.card.starred)
         if self.body:
             self.body.apply_theme()
         self.refresh_meta()
@@ -1286,7 +1291,10 @@ class CardWidget(QFrame):
         if self.card.archived:
             bg.setAlphaF(0.7)
         painter.fillPath(path, bg)
-        painter.setPen(QColor(blend(self.p.card_base, card_accent(self.card.color), 0.28)))
+        if self.card.starred:                 # starred: gold outline as a clear visual cue
+            painter.setPen(QPen(QColor(self.p.accent), 1.6))
+        else:
+            painter.setPen(QColor(blend(self.p.card_base, card_accent(self.card.color), 0.28)))
         painter.drawPath(path)
         painter.setClipPath(path)
         painter.fillRect(QRectF(r.left(), r.top(), 4, r.height()), QColor(card_accent(self.card.color)))
@@ -1376,6 +1384,8 @@ class CardWidget(QFrame):
                         lambda: QApplication.clipboard().setText(self.body.plain_text()))
         m.addAction("Expand" if c.collapsed else "Collapse", lambda: self.set_collapsed(not c.collapsed))
         m.addSeparator()
+        m.addAction(make_icon("star_filled" if c.starred else "star", self.p.accent),
+                    "Unstar" if c.starred else "Star", lambda: self.set_starred(not c.starred))
         m.addAction(make_icon("check", self.p.muted), "Mark done",
                     lambda: self.archive_requested.emit(c.id, True))
         m.addAction("Delete", lambda: self.delete_requested.emit(c.id))
@@ -1385,6 +1395,12 @@ class CardWidget(QFrame):
         self.card.color = color
         self.apply_theme()
         self._queue({"color": color}, immediate=True)
+
+    def set_starred(self, on: bool) -> None:
+        self.card.starred = on
+        self.star.setVisible(on)
+        self.update()
+        self._queue({"starred": on}, immediate=True)
 
     def set_priority(self, level: int) -> None:
         self.card.priority = level

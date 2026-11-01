@@ -15,7 +15,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Card types that sync to the phone (Supabase). Images, files and secrets stay on the PC.
 SYNC_TYPES = ("note", "checklist", "code", "links")
@@ -78,6 +78,7 @@ class Card:
     archived_at: float | None = None
     link_app: str = ""              # process name, e.g. "excel.exe"
     link_title: str = ""            # window title must contain this
+    starred: bool = False
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -123,7 +124,7 @@ class Card:
 _COLUMNS = (
     "id", "uid", "board_id", "type", "title", "color", "content", "position",
     "collapsed", "priority", "due_date", "remind_at", "archived", "archived_at",
-    "link_app", "link_title", "created_at", "updated_at",
+    "link_app", "link_title", "created_at", "updated_at", "starred",
 )
 
 
@@ -140,7 +141,7 @@ def _card_from_row(row: sqlite3.Row) -> Card:
         remind_at=row["remind_at"], archived=bool(row["archived"]),
         archived_at=row["archived_at"], link_app=row["link_app"] or "",
         link_title=row["link_title"] or "", created_at=row["created_at"],
-        updated_at=row["updated_at"],
+        updated_at=row["updated_at"], starred=bool(row["starred"]),
     )
 
 
@@ -225,6 +226,11 @@ class Database:
                     self.conn.execute("UPDATE boards SET uid = ?, updated_at = ? WHERE id = ?",
                                       (uuid.uuid4().hex, time.time(), bid))
                 self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_boards_uid ON boards(uid)")
+                self.conn.execute("PRAGMA user_version = 2")
+            version = 2
+        if version < 3:
+            with self.conn:
+                self.conn.execute("ALTER TABLE cards ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
                 self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def _seed(self) -> None:
@@ -350,7 +356,7 @@ class Database:
 
     _UPDATABLE = {
         "board_id", "type", "title", "color", "content", "collapsed", "priority",
-        "due_date", "remind_at", "archived", "archived_at", "link_app", "link_title",
+        "due_date", "remind_at", "archived", "archived_at", "link_app", "link_title", "starred",
     }
 
     def update_card(self, card_id: int, **fields: Any) -> None:
@@ -361,7 +367,7 @@ class Database:
             return
         if "content" in fields:
             fields["content"] = json.dumps(fields["content"])
-        for flag in ("collapsed", "archived"):
+        for flag in ("collapsed", "archived", "starred"):
             if flag in fields:
                 fields[flag] = int(bool(fields[flag]))
         fields["updated_at"] = time.time()
@@ -411,6 +417,7 @@ class Database:
                 d["content"] = {}
             d["collapsed"] = bool(d["collapsed"])
             d["archived"] = bool(d["archived"])
+            d["starred"] = bool(d["starred"])
             out.append(d)
         return out
 
@@ -488,19 +495,20 @@ class Database:
             json.dumps(r.get("content") or {}), r.get("position", 0), int(bool(r.get("collapsed"))),
             int(r.get("priority") or 0), r.get("due_date"), r.get("remind_at"), int(bool(r.get("archived"))),
             r.get("archived_at"), r.get("link_app") or "", r.get("link_title") or "", r["updated_at"],
+            int(bool(r.get("starred"))),
         )
         with self.conn:
             if local is None:
                 cur = self.conn.execute(
                     "INSERT INTO cards(board_id, type, title, color, content, position, collapsed, priority, "
-                    "due_date, remind_at, archived, archived_at, link_app, link_title, updated_at, "
-                    "uid, created_at, dirty, pushed) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)",
+                    "due_date, remind_at, archived, archived_at, link_app, link_title, updated_at, starred, "
+                    "uid, created_at, dirty, pushed) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)",
                     (*values, r["uid"], r.get("created_at") or r["updated_at"]))
                 return cur.lastrowid
             self.conn.execute(
                 "UPDATE cards SET board_id = ?, type = ?, title = ?, color = ?, content = ?, position = ?, "
                 "collapsed = ?, priority = ?, due_date = ?, remind_at = ?, archived = ?, archived_at = ?, "
-                "link_app = ?, link_title = ?, updated_at = ?, dirty = 0, pushed = 1 WHERE id = ?",
+                "link_app = ?, link_title = ?, updated_at = ?, starred = ?, dirty = 0, pushed = 1 WHERE id = ?",
                 (*values, local["id"]))
             return local["id"]
 
@@ -555,15 +563,15 @@ class Database:
                 self.conn.execute(
                     "INSERT INTO cards(uid, board_id, type, title, color, content, position, "
                     "collapsed, priority, due_date, remind_at, archived, archived_at, "
-                    "link_app, link_title, created_at, updated_at) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "link_app, link_title, created_at, updated_at, starred) "
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         uid, board_id, c["type"], c.get("title", ""), c.get("color", "yellow"),
                         json.dumps(c.get("content") or {}), c.get("position", 0),
                         int(bool(c.get("collapsed"))), int(c.get("priority") or 0),
                         c.get("due_date"), c.get("remind_at"), int(bool(c.get("archived"))),
                         c.get("archived_at"), c.get("link_app", ""), c.get("link_title", ""),
-                        c.get("created_at", now), c.get("updated_at", now),
+                        c.get("created_at", now), c.get("updated_at", now), int(bool(c.get("starred"))),
                     ),
                 )
                 existing.add(uid)

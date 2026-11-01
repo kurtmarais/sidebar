@@ -4,7 +4,8 @@ const { chromium } = require("playwright");
 
 async function main() {
   const [phase, profile, base, key] = process.argv.slice(2);
-  const ctx = await chromium.launchPersistentContext(profile, { headless: true, viewport: { width: 390, height: 844 } });
+  const ctx = await chromium.launchPersistentContext(profile, { headless: true, viewport: { width: 390, height: 844 },
+    hasTouch: true, isMobile: true });
   const page = ctx.pages()[0] || (await ctx.newPage());
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -43,7 +44,7 @@ async function main() {
     await page.fill(".sheet .title", "From my phone");
     await page.fill(".sheet textarea", "typed on the bus");
     if (process.env.SHOT_DIR) await page.screenshot({ path: process.env.SHOT_DIR + "/phone-editor.png" });
-    await page.click(".sheet-bar button:has-text('Done')");
+    await page.click(".sheet-bar .primary-pill");
     await waitQueueEmpty();
     // XSS check: a title containing markup must render as text
     out.markupSafe = await page.$$eval(".card-title", (els) => els.some((e) => e.textContent.includes("<img")) &&
@@ -53,11 +54,21 @@ async function main() {
     await page.evaluate(() => window.__sidebar.syncNow());
     await page.waitForSelector(".card-title:has-text('Edited on PC')", { timeout: 15000 });
     out.titles = await page.$$eval(".card-title", (els) => els.map((e) => e.textContent));
-    // archive one card, delete another
-    await page.click(".card-title:has-text('Edited on PC')");
-    await page.click(".sheet button:has-text('Mark done')");
+    // archive one card with a full right swipe, delete another from inside the note
+    const cdp = await ctx.newCDPSession(page);
+    const bx = await page.locator(".card-wrap:has(.card-title:has-text('Edited on PC'))").boundingBox();
+    const y = bx.y + 18;
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: bx.x + 40, y }] });
+    for (let i = 1; i <= 14; i++) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: bx.x + 40 + bx.width * 0.8 * i / 14, y }] });
+      await page.waitForTimeout(12);
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await page.waitForTimeout(700);
     await page.click(".card-title:has-text('From my phone')");
-    await page.click(".sheet-bar button:has-text('Delete')");
+    await page.waitForSelector(".sheet.open");
+    await page.click(".delete-note");
+    await page.waitForTimeout(500);
     await waitQueueEmpty();
     await page.click(".views button[data-view=archive]");
     out.archive = await page.$$eval(".card-title", (els) => els.map((e) => e.textContent));

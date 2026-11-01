@@ -17,7 +17,7 @@ const PRIORITY = { 0: "None", 1: "Low", 2: "Medium", 3: "High" };
 const PRIORITY_COLOR = { 1: "#4d8dff", 2: "#ff9f43", 3: "#ff6b6b" };
 const CARD_FIELDS = ["uid", "board_uid", "type", "title", "color", "content", "position", "collapsed",
   "priority", "due_date", "remind_at", "archived", "archived_at", "link_app", "link_title",
-  "created_at", "updated_at", "deleted"];
+  "created_at", "updated_at", "deleted", "starred"];
 const BOARD_FIELDS = ["uid", "name", "position", "updated_at", "deleted"];
 
 // ------------------------------------------------------------------ state
@@ -64,7 +64,7 @@ const $ = (sel) => document.querySelector(sel);
 
 // ------------------------------------------------------------------- data
 const boards = () => Object.values(S.boards).filter((b) => !b.deleted).sort((a, b) => a.position - b.position);
-const liveCards = () => Object.values(S.cards).filter((c) => !c.deleted)
+const liveCards = () => Object.values(S.cards).filter((c) => !c.deleted && !c._new)
   .sort((a, b) => a.position - b.position || a.created_at - b.created_at);
 const boardName = (u) => (S.boards[u] && S.boards[u].name) || "";
 
@@ -76,11 +76,15 @@ function pick(row, fields) {
 
 function touch(table, row) {
   row.updated_at = now();
+  delete row._new;
   S[table][row.uid] = row;
   S.queue[table][row.uid] = pick(row, table === "cards" ? CARD_FIELDS : BOARD_FIELDS);
   save();
   schedulePush();
 }
+
+const isEmpty = (c) => !c.title.trim() && !(c.content.text || "").trim()
+  && !(c.content.items || []).length && !(c.content.links || []).length;
 
 function newCard(type) {
   const first = boards()[0];
@@ -91,11 +95,12 @@ function newCard(type) {
   const card = {
     uid: uid(), board_uid: S.board || (first ? first.uid : ""), type, title: "", color: TYPE_COLOR[type],
     content, position: minPos - 1, collapsed: false, priority: 0, due_date: null, remind_at: null,
-    archived: false, archived_at: null, link_app: "", link_title: "", created_at: t, updated_at: t, deleted: false,
+    archived: false, archived_at: null, link_app: "", link_title: "", created_at: t, updated_at: t,
+    deleted: false, starred: false,
+    _new: true,          // not uploaded until something is typed; dropped if left empty
   };
-  touch("cards", card);
-  S.view = "notes";
-  query = "";
+  S.cards[card.uid] = card;
+  if (S.view !== "notes" || query) { S.view = "notes"; query = ""; const s = $("#search"); if (s) s.value = ""; renderList(); }
   openEditor(card.uid);
 }
 
@@ -150,9 +155,18 @@ async function syncNow() {
     pulledC = await sb.changesSince("cards", S.cursors.cards, tok);
     const changed = merge("boards", pulledB) | merge("cards", pulledC);
     for (const table of ["boards", "cards"]) {
-      const rows = Object.values(S.queue[table]);
+      let rows = Object.values(S.queue[table]);
       if (!rows.length) continue;
-      await sb.upsert(table, rows, tok);
+      if (S.noStarColumn) rows = rows.map(({ starred, ...r }) => r);
+      try {
+        await sb.upsert(table, rows, tok);
+      } catch (e) {
+        // Supabase not yet updated with the "starred" column: sync everything else.
+        if (!/starred/.test(e.message || "") || table !== "cards") throw e;
+        S.noStarColumn = true;
+        rows = rows.map(({ starred, ...r }) => r);
+        await sb.upsert(table, rows, tok);
+      }
       for (const r of rows) {
         if (S.queue[table][r.uid] && S.queue[table][r.uid].updated_at === r.updated_at) delete S.queue[table][r.uid];
       }
@@ -182,6 +196,7 @@ function setStatus(text) {
   const pending = Object.keys(S.queue.cards).length + Object.keys(S.queue.boards).length;
   const last = S.lastSync ? new Date(S.lastSync * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
   el.textContent = text || (pending ? `${pending} change${pending > 1 ? "s" : ""} waiting` : last ? `Synced ${last}` : "");
+  el.title = S.noStarColumn ? "Stars stay on this phone until the Supabase starred update is run" : "";
 }
 
 // ------------------------------------------------------------- dates
@@ -282,21 +297,199 @@ function cardPreview(c) {
 }
 
 function cardEl(c) {
-  const badges = [];
-  if (c.priority) badges.push(h("span", { class: "badge", style: { color: PRIORITY_COLOR[c.priority] } }, PRIORITY[c.priority]));
-  const due = dueBadge(c);
-  if (due) badges.push(h("span", { class: "badge", style: { color: due[1] } }, due[0]));
-  if (c.remind_at) badges.push(h("span", { class: "badge" }, "⏰ " + remindText(c.remind_at)));
+  // Header row: star, title, then category and priority tags on the same line.
+  const tags = [];
   if (S.view !== "notes" || !S.board) {
     const b = boardName(c.board_uid);
-    if (b) badges.push(h("span", { class: "badge muted" }, b));
+    if (b) tags.push(h("span", { class: "badge muted" }, b));
   }
-  return h("article", { class: "card", style: { "--c": COLORS[c.color] || COLORS.yellow },
-    onclick: () => openEditor(c.uid) },
-    h("div", { class: "card-title" }, c.title || h("span", { class: "muted" }, TYPES[c.type] || "Card")),
-    badges.length ? h("div", { class: "badges" }, badges) : null,
+  if (c.priority) tags.push(h("span", { class: "badge", style: { color: PRIORITY_COLOR[c.priority] } }, PRIORITY[c.priority]));
+  const dates = [];
+  const due = dueBadge(c);
+  if (due) dates.push(h("span", { class: "badge", style: { color: due[1] } }, due[0]));
+  if (c.remind_at) dates.push(h("span", { class: "badge" }, "⏰ " + remindText(c.remind_at)));
+
+  const card = h("article", { class: "card" + (c.starred ? " starred" : ""), style: { "--c": COLORS[c.color] || COLORS.yellow } },
+    h("div", { class: "card-head" },
+      c.starred ? h("span", { class: "star", "aria-label": "Starred" }, "★") : null,
+      h("span", { class: "card-title" }, c.title || h("span", { class: "muted" }, TYPES[c.type] || "Card")),
+      tags.length ? h("span", { class: "tags" }, tags) : null),
+    dates.length ? h("div", { class: "badges" }, dates) : null,
     cardPreview(c),
     c.archived ? h("button", { class: "pill", onclick: (e) => { e.stopPropagation(); archive(c.uid, false); } }, "Restore") : null);
+
+  const archiving = !c.archived;
+  const wrap = h("div", { class: "card-wrap", "data-uid": c.uid },
+    h("div", { class: "swipe-bg" },
+      h("span", { class: "act left" }, archiving ? "Archive" : "Restore"),
+      h("span", { class: "act right" }, c.starred ? "☆ Unstar" : "★ Star")),
+    card);
+  card.addEventListener("click", () => { if (!wrap.dataset.noclick) openEditor(c.uid); });
+  attachGestures(wrap, card, c);
+  return wrap;
+}
+
+// ---------------------------------------------------------------- gestures
+// Swipe right all the way: archive (restore in Archive). Swipe left all the way:
+// star / unstar. A partial swipe springs back and does nothing. Press and hold,
+// then drag: reorder (Notes view, no search). Vertical movement scrolls as usual.
+let gesture = null;                     // the active swipe or drag, if any
+document.addEventListener("touchmove", (e) => { if (gesture) e.preventDefault(); }, { passive: false });
+
+const FULL_SWIPE = 0.5;                 // fraction of the card width that counts as "all the way"
+const HOLD_MS = 380;
+
+function canReorder() { return S.view === "notes" && !query.trim(); }
+
+function attachGestures(wrap, card, c) {
+  let start = null, timer = null;
+  const bg = wrap.querySelector(".swipe-bg");
+
+  const reset = () => { clearTimeout(timer); timer = null; start = null; gesture = null; };
+  const noClick = () => { wrap.dataset.noclick = "1"; setTimeout(() => delete wrap.dataset.noclick, 350); };
+
+  wrap.addEventListener("pointerdown", (e) => {
+    if (e.button > 0 || e.target.closest("input, a, button, select, textarea")) return;
+    start = { x: e.clientX, y: e.clientY, id: e.pointerId, mode: null };
+    if (canReorder()) timer = setTimeout(() => { if (start && !start.mode) beginDrag(e); }, HOLD_MS);
+  });
+
+  wrap.addEventListener("pointermove", (e) => {
+    if (!start || e.pointerId !== start.id) return;
+    const dx = e.clientX - start.x, dy = e.clientY - start.y;
+    if (!start.mode) {
+      if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+        start.mode = "swipe"; gesture = "swipe"; clearTimeout(timer);
+        wrap.setPointerCapture(e.pointerId);
+        wrap.classList.add("swiping");
+      } else if (Math.abs(dy) > 10) {
+        clearTimeout(timer); start = null;            // a scroll: let the page handle it
+        return;
+      }
+    }
+    if (start.mode === "swipe") {
+      card.style.transform = `translateX(${dx}px)`;
+      const full = Math.abs(dx) > wrap.offsetWidth * FULL_SWIPE;
+      bg.className = "swipe-bg " + (dx > 0 ? "show-left" : "show-right") + (full ? " full" : "");
+    } else if (start.mode === "drag") {
+      moveDrag(e);
+    }
+  });
+
+  const end = (e, cancelled) => {
+    if (!start || e.pointerId !== start.id) return;
+    const mode = start.mode;
+    const dx = e.clientX - start.x;
+    if (mode === "swipe") {
+      noClick();
+      const full = !cancelled && Math.abs(dx) > wrap.offsetWidth * FULL_SWIPE;
+      if (full && dx > 0) archiveWithAnimation(wrap, card, c);
+      else if (full) starWithAnimation(wrap, card, c);
+      else springBack(wrap, card);
+    } else if (mode === "drag") {
+      noClick();
+      endDrag(cancelled);
+    }
+    reset();
+  };
+  wrap.addEventListener("pointerup", (e) => end(e, false));
+  wrap.addEventListener("pointercancel", (e) => end(e, true));
+
+  function beginDrag(e) {
+    start.mode = "drag"; gesture = "drag";
+    wrap.setPointerCapture(start.id);
+    const list = $("#list");
+    const items = [...list.querySelectorAll(".card-wrap")];
+    const gap = parseFloat(getComputedStyle(wrap).marginBottom) || 8;
+    drag = { wrap, uid: c.uid, items, from: items.indexOf(wrap), to: items.indexOf(wrap),
+      startY: e.clientY, scroll0: window.scrollY, height: wrap.offsetHeight + gap,
+      mids: items.map((el) => el.getBoundingClientRect().top + window.scrollY + el.offsetHeight / 2) };
+    wrap.classList.add("dragging");
+    navigator.vibrate?.(10);
+  }
+}
+
+let drag = null;
+
+function moveDrag(e) {
+  if (!drag) return;
+  // Auto-scroll near the screen edges.
+  if (e.clientY < 90) window.scrollBy(0, -10);
+  else if (e.clientY > window.innerHeight - 90) window.scrollBy(0, 10);
+  const dy = e.clientY - drag.startY + (window.scrollY - drag.scroll0);
+  drag.wrap.style.transform = `translateY(${dy}px) scale(1.02)`;
+  const center = drag.mids[drag.from] + dy;
+  let to = drag.from;
+  for (let i = 0; i < drag.items.length; i++) {
+    if (i < drag.from && center < drag.mids[i]) { to = i; break; }
+    if (i > drag.from && center > drag.mids[i]) to = i;
+  }
+  drag.to = to;
+  drag.items.forEach((el, i) => {
+    if (el === drag.wrap) return;
+    let shift = 0;
+    if (drag.from < to && i > drag.from && i <= to) shift = -drag.height;
+    if (drag.from > to && i >= to && i < drag.from) shift = drag.height;
+    el.style.transform = shift ? `translateY(${shift}px)` : "";
+  });
+}
+
+function endDrag(cancelled) {
+  if (!drag) return;
+  const d = drag;
+  drag = null;
+  d.wrap.classList.remove("dragging");
+  if (cancelled || d.to === d.from) {
+    d.items.forEach((el) => { el.style.transform = ""; });
+    return;
+  }
+  const order = d.items.map((el) => el.dataset.uid);
+  order.splice(d.to, 0, order.splice(d.from, 1)[0]);
+  reorder(order, d.uid);
+  renderList();
+}
+
+function reorder(order, movedUid) {
+  // Give only the moved card a new position between its neighbours (one change to sync).
+  const i = order.indexOf(movedUid);
+  const prev = S.cards[order[i - 1]], next = S.cards[order[i + 1]];
+  let pos;
+  if (prev && next) pos = (prev.position + next.position) / 2;
+  else if (prev) pos = prev.position + 1;
+  else if (next) pos = next.position - 1;
+  else pos = 0;
+  const tooClose = prev && next && Math.abs(next.position - prev.position) < 1e-6;
+  if (tooClose) {                      // equal neighbours: renumber the visible list instead
+    const base = Math.min(...order.map((u) => S.cards[u].position));
+    order.forEach((u, k) => { if (S.cards[u].position !== base + k) touch("cards", { ...structuredClone(S.cards[u]), position: base + k }); });
+    return;
+  }
+  touch("cards", { ...structuredClone(S.cards[movedUid]), position: pos });
+}
+
+function springBack(wrap, card) {
+  card.classList.add("settle");
+  card.style.transform = "";
+  setTimeout(() => { card.classList.remove("settle"); wrap.classList.remove("swiping"); }, 260);
+}
+
+function archiveWithAnimation(wrap, card, c) {
+  card.classList.add("settle");
+  card.style.transform = "translateX(110%)";
+  setTimeout(() => {
+    wrap.style.height = wrap.offsetHeight + "px";
+    wrap.classList.add("collapse");
+    requestAnimationFrame(() => { wrap.style.height = "0px"; });
+    setTimeout(() => archive(c.uid, !c.archived), 240);
+  }, 200);
+}
+
+function starWithAnimation(wrap, card, c) {
+  const updated = structuredClone(S.cards[c.uid]);
+  updated.starred = !updated.starred;
+  touch("cards", updated);
+  springBack(wrap, card);
+  setTimeout(renderList, 270);
 }
 
 function renderList() {
@@ -366,11 +559,15 @@ function archive(cardUid, on) {
 
 // ---------------------------------------------------------------- editor
 function openEditor(cardUid) {
+  if ($("#editor")) return;
   editing = cardUid;
   const c = structuredClone(S.cards[cardUid]);
+  const isNew = !!c._new;
+  delete c._new;
   let dirty = false;
   let timer = null;
-  const commit = () => { if (dirty) { touch("cards", c); dirty = false; } };
+  // A brand-new note isn't saved until it has something in it; existing notes always save.
+  const commit = () => { if (dirty && !(isNew && isEmpty(c) && !S.queue.cards[c.uid])) { touch("cards", c); dirty = false; } };
   const change = () => { dirty = true; clearTimeout(timer); timer = setTimeout(commit, 600); };
 
   const body = h("div", { class: "editor-body" });
@@ -407,33 +604,74 @@ function openEditor(cardUid) {
   };
   drawBody();
 
-  const close = () => { clearTimeout(timer); commit(); editing = null; $("#editor").remove(); renderList(); };
+  // Back and Done both keep your changes (everything saves as you type); Done is
+  // the usual way to finish. A new note left empty is simply dropped.
+  const close = () => {
+    clearTimeout(timer);
+    if (document.activeElement) document.activeElement.blur();
+    commit();
+    if (isNew && isEmpty(c)) {                  // nothing was written: drop it
+      if (S.queue.cards[c.uid]) touch("cards", { ...c, deleted: true });
+      delete S.cards[c.uid];
+      save();
+    }
+    editing = null;
+    dismissSheet();
+    renderList();
+    const shown = document.querySelector(`.card-wrap[data-uid="${c.uid}"]`);
+    if (shown && isNew) shown.classList.add("pop");
+  };
+  const del = () => {
+    if (!confirm("Delete this note permanently?")) return;
+    clearTimeout(timer);
+    editing = null;
+    if (S.queue.cards[c.uid] || !isNew) touch("cards", { ...c, deleted: true });
+    delete S.cards[c.uid];
+    save();
+    dismissSheet();
+    renderList();
+  };
+  const starBtn = h("button", { class: "star-toggle" + (c.starred ? " on" : ""), "aria-label": "Star",
+    onclick: () => { c.starred = !c.starred; starBtn.classList.toggle("on", c.starred); starBtn.textContent = c.starred ? "★" : "☆"; change(); } },
+    c.starred ? "★" : "☆");
+
   const sheet = h("div", { id: "editor", class: "sheet" },
     h("div", { class: "sheet-bar" },
-      h("button", { class: "pill", onclick: close }, "Done"),
+      h("button", { class: "back", onclick: close }, "‹ Back"),
       h("span", { class: "muted" }, TYPES[c.type]),
-      h("button", { class: "pill danger", onclick: () => {
-        if (!confirm("Delete this card permanently?")) return;
-        clearTimeout(timer); editing = null; touch("cards", { ...c, deleted: true }); delete S.cards[c.uid]; save();
-        $("#editor").remove(); renderList(); } }, "Delete")),
-    h("input", { class: "title", placeholder: "Title", value: c.title, oninput: (e) => { c.title = e.target.value; change(); } }),
+      h("button", { class: "pill primary-pill", onclick: close }, "Done")),
+    h("div", { class: "title-row" },
+      h("input", { class: "title", placeholder: "Title", value: c.title, oninput: (e) => { c.title = e.target.value; change(); } }),
+      starBtn),
     body,
     h("div", { class: "meta" },
       h("label", {}, "Category", h("select", { onchange: (e) => { c.board_uid = e.target.value; change(); } },
         boards().map((b) => h("option", { value: b.uid, selected: b.uid === c.board_uid }, b.name)))),
       h("label", {}, "Priority", h("select", { onchange: (e) => { c.priority = Number(e.target.value); change(); } },
         [3, 2, 1, 0].map((p) => h("option", { value: p, selected: c.priority === p }, PRIORITY[p])))),
-      h("label", {}, "Due date", h("input", { type: "date", value: c.due_date || "",
+      h("label", { class: "full" }, "Due date", h("input", { type: "date", value: c.due_date || "",
         onchange: (e) => { c.due_date = e.target.value || null; change(); } })),
-      h("label", {}, "Reminder", h("input", { type: "datetime-local", value: toLocalInput(c.remind_at),
+      h("label", { class: "full" }, "Reminder", h("input", { type: "datetime-local", value: toLocalInput(c.remind_at),
         onchange: (e) => { c.remind_at = e.target.value ? new Date(e.target.value).getTime() / 1000 : null; change(); } })),
       h("div", { class: "swatches" }, Object.entries(COLORS).map(([name, hex]) => h("button", {
         class: "swatch" + (c.color === name ? " on" : ""), style: { background: hex }, "aria-label": name,
         onclick: (e) => { c.color = name; change(); for (const s of e.target.parentNode.children) s.classList.remove("on"); e.target.classList.add("on"); } })))),
-    h("button", { class: "pill wide", onclick: () => { c.archived = !c.archived; c.archived_at = c.archived ? now() : null; dirty = true; close(); } },
-      c.archived ? "Restore from archive" : "Mark done (archive)"));
+    h("button", { class: "delete-note", onclick: del }, "Delete note"));
   document.body.append(sheet);
-  if (!c.title && c.type !== "checklist") sheet.querySelector(".title").focus();
+  document.body.classList.add("sheet-open");
+  requestAnimationFrame(() => requestAnimationFrame(() => sheet.classList.add("open")));
+  if (!c.title && c.type !== "checklist") setTimeout(() => sheet.querySelector(".title").focus(), 50);
+}
+
+function dismissSheet() {
+  const sheet = $("#editor");
+  if (!sheet) return;
+  sheet.id = "";                                   // a new editor can open straight away
+  sheet.classList.remove("open");
+  document.body.classList.remove("sheet-open");
+  const done = () => sheet.remove();
+  sheet.addEventListener("transitionend", done, { once: true });
+  setTimeout(done, 400);
 }
 
 // ------------------------------------------------------------- screens
@@ -508,6 +746,7 @@ function render() {
 }
 
 // ------------------------------------------------------------------ start
+S.noStarColumn = false;        // re-check each launch: the Supabase update may have been run since
 render();
 if (S.session) syncNow();
 // Ask the browser to keep this app's storage (sign-in and notes) instead of clearing it under storage pressure.

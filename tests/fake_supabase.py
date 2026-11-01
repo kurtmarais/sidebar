@@ -23,7 +23,7 @@ DEFAULTS = {
     "cards": {"board_uid": "", "type": "note", "title": "", "color": "yellow", "content": {},
               "position": 0, "collapsed": False, "priority": 0, "due_date": None, "remind_at": None,
               "archived": False, "archived_at": None, "link_app": "", "link_title": "",
-              "deleted": False, "created_at": 0},
+              "deleted": False, "created_at": 0, "starred": False},
 }
 CARD_TYPES = {"note", "checklist", "code", "links"}
 
@@ -37,6 +37,7 @@ class FakeSupabase:
         self.refresh: dict[str, str] = {}     # refresh token -> user id
         self.key = "sb_publishable_test"
         self.static_dir = static_dir
+        self.no_star_column = False      # simulate Supabase before the "starred" SQL update
         self.config_js: str | None = 'export const SUPABASE_URL = "";\nexport const SUPABASE_KEY = "";\n'
         self.lock = threading.Lock()
         self.requests: list[str] = []
@@ -136,6 +137,9 @@ class FakeSupabase:
                         return self._send(*err)
                     table = url.path.rsplit("/", 1)[-1]
                     rows = body if isinstance(body, list) else [body]
+                    if server.no_star_column and table == "cards" and any("starred" in r for r in rows):
+                        return self._send(400, {"code": "PGRST204", "message":
+                                                "Could not find the 'starred' column of 'cards' in the schema cache"})
                     with server.lock:
                         for row in rows:
                             if table == "cards" and row.get("type", "note") not in CARD_TYPES:
