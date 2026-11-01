@@ -13,7 +13,7 @@ from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import __version__, backup
+from . import __version__, backup, updater, winplatform
 from .paths import default_data_dir
 from .storage import Database
 from .theme import app_icon
@@ -45,6 +45,26 @@ def _pick_font() -> QFont:
     return QApplication.font()
 
 
+def _install_error_log(path: Path) -> None:
+    """The app runs without a console (pyw), so record unexpected errors in a file."""
+    import time
+    import traceback
+
+    def hook(exc_type, exc, tb):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists() and path.stat().st_size > 200_000:
+                path.write_text("", encoding="utf-8")
+            with path.open("a", encoding="utf-8") as f:
+                f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} (version {__version__})\n")
+                f.write("".join(traceback.format_exception(exc_type, exc, tb)) + "\n")
+        except OSError:
+            pass
+        sys.__excepthook__(exc_type, exc, tb)
+
+    sys.excepthook = hook
+
+
 def build_tray(app: QApplication, win: SidebarWindow) -> QSystemTrayIcon | None:
     if not QSystemTrayIcon.isSystemTrayAvailable():
         return None
@@ -54,6 +74,8 @@ def build_tray(app: QApplication, win: SidebarWindow) -> QSystemTrayIcon | None:
     menu.addAction("Open sidebar", lambda: win.expand(activate=True))
     menu.addAction("New note", lambda: win.new_card("note"))
     menu.addAction("Settings…", win.open_settings)
+    if updater.repo_root() is not None:
+        menu.addAction("Update and restart", win.update_and_restart)
     menu.addSeparator()
     menu.addAction("Quit", app.quit)
     tray.setContextMenu(menu)
@@ -70,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=__version__)
     args, qt_args = parser.parse_known_args(argv if argv is not None else sys.argv[1:])
 
+    QGuiApplication.setAttribute(Qt.AA_ShareOpenGLContexts)   # required by Qt WebEngine
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication([sys.argv[0], *qt_args])
     app.setApplicationName("Sidebar")
@@ -85,7 +108,12 @@ def main(argv: list[str] | None = None) -> int:
     server.listen(SERVER_NAME)
 
     app.setFont(_pick_font())
+    try:
+        winplatform.refresh_startup_entry()   # keep "Start with Windows" pointing at this copy
+    except OSError:
+        pass
     data_dir = args.data_dir or default_data_dir()
+    _install_error_log(data_dir / "error.log")
     db = Database(data_dir / "sidebar.db")
     try:
         backup.auto_backup(db, data_dir / "backups")
@@ -104,7 +132,11 @@ def main(argv: list[str] | None = None) -> int:
 
     def on_quit() -> None:
         win.shutdown()
+        restart = win.restart_after_update
+        auto = bool(win.s.get("auto_update", True))
         db.close()
+        if restart or auto:
+            updater.spawn_update(data_dir / "update.log", restart=restart)
 
     app.aboutToQuit.connect(on_quit)
     win.show()

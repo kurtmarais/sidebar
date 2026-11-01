@@ -20,17 +20,20 @@ from PySide6.QtCore import (
     QEasingCurve, QPoint, QRect, QSize, Qt, QTimer, QVariantAnimation, Signal,
 )
 from PySide6.QtGui import (
-    QColor, QCursor, QGuiApplication, QImage, QKeySequence, QPainter, QPainterPath, QShortcut,
+    QColor, QCursor, QGuiApplication, QImage, QKeySequence, QPainter, QPainterPath, QPixmap, QRegion,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu,
-    QMessageBox, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
+    QDialog, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 
-from . import backup, dialogs, winplatform
+from . import backup, dialogs, updater, winplatform
 from .cardlist import VIEW_ARCHIVE, VIEW_CARDS, VIEW_TODAY, BoardTabBar, CardList, today_section
+from .quickbar import QuickBar
+from .sync_qt import SyncController, SyncDialog, last_sync_text
 from .cards import (
     CARD_KINDS, EXTENSION_LANGUAGES, CardEnv, CardWidget, confirm, icon_button, retint,
     tomorrow_at_nine,
@@ -40,7 +43,7 @@ from .theme import Palette, app_icon, make_icon, palette, stylesheet
 
 STRIP_W = 6        # collapsed width: the visible blue strip
 MARGIN = 8         # gap around the floating panel
-ANIM_MS = 200
+ANIM_MS = 220
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 MAX_CODE_BYTES = 512 * 1024
@@ -150,6 +153,7 @@ class SidebarWindow(QWidget):
         self.p: Palette = palette(self.s["theme"])
         self.progress = 0.0
         self._target = 0.0
+        self._sliding = False
         self._hotkey_hwnd: int | None = None
         self._context: tuple[str, str] | None = None     # last external foreground window
         self._link_mode = False
@@ -157,6 +161,9 @@ class SidebarWindow(QWidget):
         self._offered_meetings: set[str] = set()
         self._focus_end: float | None = None
         self.tray = None
+        self._stale: set[int] = set()        # cards changed on the phone while being edited here
+        self._sync_text = ""
+        self.restart_after_update = False
 
         self.setWindowTitle("Sidebar")
         self.setWindowIcon(app_icon())
@@ -178,6 +185,10 @@ class SidebarWindow(QWidget):
         self.panel = QFrame(self)
         self.panel.setObjectName("panel")
         self._build_panel()
+        self.ghost = QLabel(self)              # snapshot of the panel used while sliding
+        self.ghost.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.ghost.hide()
+        self._sliding = False
 
         self.anim = QVariantAnimation(self)
         self.anim.setDuration(ANIM_MS)
@@ -210,6 +221,11 @@ class SidebarWindow(QWidget):
         for scr in QGuiApplication.screens():
             scr.availableGeometryChanged.connect(lambda _g: self.reposition())
 
+        dialogs.set_placer(self.place_beside)
+        self.syncer = SyncController(db, self)
+        self.syncer.applied.connect(self.apply_remote_changes)
+        self.syncer.status_changed.connect(self._sync_status)
+        self._sync_text = last_sync_text(db) if self.syncer.enabled() else ""
         self.load_cards()
         self.apply_theme()
         self._update_context_timer()
@@ -242,6 +258,11 @@ class SidebarWindow(QWidget):
         h.addWidget(self.pin_btn)
         h.addWidget(self.menu_btn)
         lay.addWidget(self.header)
+
+        # Quick tiles: focus sound + app launcher
+        self.quickbar = QuickBar(self.p, self.s.get, self._put_setting)
+        self.quickbar.setVisible(bool(self.s["show_quickbar"]))
+        lay.addWidget(self.quickbar)
 
         # View pills: Notes / Today / Archive
         views = QHBoxLayout()
@@ -314,7 +335,7 @@ class SidebarWindow(QWidget):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.list = CardList(self.scroll)
-        self.list.order_changed.connect(self.db.set_card_order)
+        self.list.order_changed.connect(lambda ids: (self.db.set_card_order(ids), self._local_change()))
         self.scroll.setWidget(self.list)
         lay.addWidget(self.scroll, 1)
 
@@ -347,6 +368,10 @@ class SidebarWindow(QWidget):
         paste = QShortcut(QKeySequence.Paste, self.panel, self.paste)
         paste.setContext(Qt.WidgetWithChildrenShortcut)
 
+    def _put_setting(self, key: str, value) -> None:
+        self.s[key] = value
+        self.db.set_setting(key, value)
+
     # ============================================================== cards
     def load_cards(self) -> None:
         for card in self.db.cards():
@@ -366,6 +391,57 @@ class SidebarWindow(QWidget):
 
     def _save_card(self, card_id: int, fields: dict) -> None:
         self.db.update_card(card_id, **fields)
+        self._local_change()
+
+    def _local_change(self) -> None:
+        self.syncer.local_change()
+
+    # ------------------------------------------------------- phone sync
+    def _sync_status(self, text: str, detail: str) -> None:
+        self._sync_text = text
+        self.count_label.setToolTip(detail)
+        self.refresh_count()
+
+    def open_sync(self) -> None:
+        self.expand(activate=True)
+        dialogs.run(SyncDialog(self, self.db, self.syncer, lambda: self._sync_status(
+            last_sync_text(self.db) if self.syncer.enabled() else "", "")))
+        # Signing in may have downloaded notes from the phone: show everything fresh.
+        self.apply_remote_changes({c.id for c in self.db.cards()} | set(self.list.widgets), True)
+
+    def _editing(self, w: CardWidget) -> bool:
+        focus = QApplication.focusWidget()
+        return w._save_timer.isActive() or (focus is not None and w.isAncestorOf(focus))
+
+    def apply_remote_changes(self, changed: set, boards_changed: bool) -> None:
+        """Show edits that arrived from the phone. A card you are typing in is left
+        alone and refreshed once you leave it (your newer edit then wins anyway)."""
+        self._stale |= set(changed)
+        if boards_changed:
+            valid = {b.id for b in self.db.boards()}
+            current = self.tabs.board_id(self.tabs.currentIndex()) if self.tabs.count() else 0
+            self._rebuild_tabs(select_board=current if current in valid else 0)
+            self._stale |= {cid for cid in self.list.widgets if self.db.card(cid) is None}
+        self._apply_stale()
+
+    def _apply_stale(self) -> None:
+        if not self._stale:
+            return
+        for cid in list(self._stale):
+            w = self.list.widgets.get(cid)
+            if w is not None and self._editing(w):
+                continue
+            self._stale.discard(cid)
+            card = self.db.card(cid)
+            if card is None:
+                if w is not None:
+                    self.list.remove(cid)
+            elif w is None:
+                self.list.add(self._make_widget(card))
+            else:
+                self.list.replace(cid, self._make_widget(card))
+        self.list.order = [c.id for c in self.db.cards() if c.id in self.list.widgets]
+        self.refresh()
 
     def _target_board(self) -> int:
         bid = self.tabs.board_id(self.tabs.currentIndex()) if self.tabs.count() else 0
@@ -373,6 +449,7 @@ class SidebarWindow(QWidget):
 
     def add_card(self, type_: str, focus: bool = True, **kwargs) -> CardWidget:
         card = self.db.add_card(self._target_board(), type_, **kwargs)
+        self._local_change()
         w = self._make_widget(card)
         self.list.add(w, at_top=True)
         if self.list.view != VIEW_CARDS:
@@ -400,6 +477,7 @@ class SidebarWindow(QWidget):
             return
         asset = w.card.content.get("asset") if w.card.type == "image" else None
         self.db.delete_card(card_id)
+        self._local_change()
         self.list.remove(card_id)
         if asset:
             try:
@@ -414,6 +492,7 @@ class SidebarWindow(QWidget):
             return
         w.flush()
         self.db.archive_card(card_id, archived)
+        self._local_change()
         w.card.archived = archived
         w.card.archived_at = time.time() if archived else None
         if card_id in self._alerts and archived:
@@ -428,6 +507,7 @@ class SidebarWindow(QWidget):
         if w is None or w.card.board_id == board_id:
             return
         self.db.update_card(card_id, board_id=board_id)
+        self._local_change()
         w.card.board_id = board_id
         self.refresh()
 
@@ -532,10 +612,18 @@ class SidebarWindow(QWidget):
         self.list.board_id = self.tabs.board_id(self.tabs.currentIndex()) if self.tabs.count() else 0
         self.list.context = self._context if self._follow_enabled() else None
         n = self.list.refresh()
-        noun = {VIEW_ARCHIVE: "archived", VIEW_TODAY: "for today"}.get(self.list.view, "")
-        self.count_label.setText(f"{n} note{'s' if n != 1 else ''} {noun}".strip())
+        self._shown = n
+        self.refresh_count()
         self._update_today_count()
         self._update_context_row()
+
+    def refresh_count(self) -> None:
+        n = getattr(self, "_shown", 0)
+        noun = {VIEW_ARCHIVE: "archived", VIEW_TODAY: "for today"}.get(self.list.view, "")
+        text = f"{n} note{'s' if n != 1 else ''} {noun}".strip()
+        if self._sync_text:
+            text += f"  ·  {self._sync_text}"
+        self.count_label.setText(text)
 
     def _update_today_count(self) -> None:
         today, now = datetime.now().date(), datetime.now()
@@ -569,6 +657,7 @@ class SidebarWindow(QWidget):
         name = dialogs.ask_text(self, "New category", "Category name:")
         if name:
             b = self.db.add_board(name)
+            self._local_change()
             self._rebuild_tabs(select_board=b.id)
             self._tab_changed(self.tabs.currentIndex())
 
@@ -594,6 +683,7 @@ class SidebarWindow(QWidget):
         name = dialogs.ask_text(self, "Rename category", "Category name:", old)
         if name:
             self.db.rename_board(bid, name)
+            self._local_change()
             self._rebuild_tabs(select_board=bid)
 
     def _move_board(self, bid: int, delta: int) -> None:
@@ -601,6 +691,7 @@ class SidebarWindow(QWidget):
         i = ids.index(bid)
         ids.insert(i + delta, ids.pop(i))
         self.db.set_board_order(ids)
+        self._local_change()
         self._rebuild_tabs(select_board=bid)
 
     def _delete_board(self, bid: int, name: str) -> None:
@@ -609,6 +700,7 @@ class SidebarWindow(QWidget):
                        f"Delete “{name}” and its {n} note{'s' if n != 1 else ''}? This cannot be undone."):
             return
         self.db.delete_board(bid)
+        self._local_change()
         for cid in [c for c, w in self.list.widgets.items() if w.card.board_id == bid]:
             self.list.remove(cid)
         self._rebuild_tabs(select_board=0)
@@ -872,27 +964,66 @@ class SidebarWindow(QWidget):
         x = avail.right() + 1 - STRIP_W if self.edge == "right" else avail.left()
         return QRect(x, y, STRIP_W, length)
 
-    def _geometry_for(self, progress: float) -> QRect:
-        if progress <= 0:
-            return self._strip_rect()
+    def _full_rect(self) -> QRect:
         avail = self._screen().availableGeometry()
-        width = STRIP_W + round((int(self.s["panel_width"]) + MARGIN) * progress)
+        width = STRIP_W + MARGIN + int(self.s["panel_width"])
         x = avail.right() + 1 - width if self.edge == "right" else avail.left()
         return QRect(x, avail.top(), width, avail.height())
 
-    def _layout_children(self) -> None:
-        w, h = self.width(), self.height()
+    def _geometry_for(self, _progress: float = 0.0) -> QRect:
+        """The window never changes size while in use. Resizing a translucent
+        window on Windows briefly shows the old picture at the new top-left,
+        which made the strip jump. Closed, everything but the strip is
+        transparent and masked out, so it neither shows nor catches clicks."""
+        return self._full_rect()
+
+    def _panel_x(self, progress: float) -> int:
+        """Panel x inside the window; it slides in from the screen edge."""
         pw = int(self.s["panel_width"])
-        strip = self._strip_rect()
-        sy = strip.top() - self.geometry().top() if self.progress > 0 else 0
+        full_w = STRIP_W + MARGIN + pw
         if self.edge == "right":
-            self.strip.setGeometry(w - STRIP_W, sy, STRIP_W, strip.height())
-            self.panel.setGeometry(0, MARGIN, pw, max(0, h - 2 * MARGIN))
+            return round(full_w * (1.0 - progress))                 # open at 0
+        open_x, closed_x = STRIP_W + MARGIN, -pw
+        return round(closed_x + (open_x - closed_x) * progress)
+
+    def _strip_local(self) -> QRect:
+        strip = self._strip_rect()
+        full = self._full_rect()
+        x = full.width() - STRIP_W if self.edge == "right" else 0
+        return QRect(x, strip.top() - full.top(), STRIP_W, strip.height())
+
+    def _panel_area(self) -> QRect:
+        """Where the open panel sits, in window coordinates."""
+        return QRect(self._panel_x(1.0), MARGIN, int(self.s["panel_width"]),
+                     max(0, self._full_rect().height() - 2 * MARGIN))
+
+    def _active_region(self) -> QRegion:
+        """The part of the window that is shown and receives the mouse."""
+        region = QRegion(self._strip_local())
+        if self.progress > 0 or self._sliding:
+            region = region.united(QRegion(self._panel_area()))
+        return region
+
+    def _apply_mask(self) -> None:
+        region = self._active_region()
+        if region != self.mask():
+            self.setMask(region)
+
+    def _cursor_inside(self) -> bool:
+        return self.isVisible() and self._active_region().contains(self.mapFromGlobal(QCursor.pos()))
+
+    def _layout_children(self) -> None:
+        self.strip.setGeometry(self._strip_local())
+        panel = self._panel_area()
+        if self._sliding:
+            self.panel.setGeometry(panel)
+            self.ghost.move(self._panel_x(self.progress), MARGIN)
         else:
-            self.strip.setGeometry(0, sy, STRIP_W, strip.height())
-            self.panel.setGeometry(w - pw, MARGIN, pw, max(0, h - 2 * MARGIN))
-        self.panel.setVisible(self.progress > 0)
+            panel.moveLeft(self._panel_x(max(self.progress, 0.0)))
+            self.panel.setGeometry(panel)
+            self.panel.setVisible(self.progress > 0)
         self.strip.raise_()
+        self._apply_mask()
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
@@ -900,11 +1031,52 @@ class SidebarWindow(QWidget):
 
     def _set_progress(self, value: float) -> None:
         self.progress = value
-        self.setGeometry(self._geometry_for(value))
-        self._layout_children()
+        if self._sliding:
+            self.ghost.move(self._panel_x(value), MARGIN)   # cheap: move a picture
+            if value <= 0 and self._target == 0.0:
+                self._apply_mask()
+        else:
+            self._layout_children()
+
+    def _snapshot(self) -> QPixmap:
+        """Picture of the panel with transparent rounded corners."""
+        dpr = self.devicePixelRatioF()
+        size = self.panel.size()
+        pix = QPixmap(max(1, round(size.width() * dpr)), max(1, round(size.height() * dpr)))
+        pix.setDevicePixelRatio(dpr)
+        pix.fill(Qt.transparent)
+        self.panel.render(pix, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)
+        return pix
+
+    def _start_slide(self, target: float) -> None:
+        """Animate a snapshot of the panel; the real panel appears when it lands."""
+        self.anim.stop()
+        self._end_slide()
+        self.panel.setGeometry(self._panel_area())
+        self.panel.ensurePolished()
+        if self.panel.layout() is not None:
+            self.panel.layout().activate()
+        snap = self._snapshot()
+        if not snap.isNull():
+            self.ghost.setPixmap(snap)
+            self.ghost.resize(self.panel.size())
+            self._sliding = True
+            self.panel.hide()
+            self.ghost.move(self._panel_x(self.progress), MARGIN)
+            self.ghost.show()
+            self.ghost.raise_()
+            self.strip.raise_()
+        self._apply_mask()
+        self.anim.setStartValue(self.progress)
+        self.anim.setEndValue(target)
+        self.anim.start()
 
     def reposition(self) -> None:
         self.anim.stop()
+        self._end_slide()
+        rect = self._full_rect()
+        if self.geometry() != rect:
+            self.setGeometry(rect)
         self._set_progress(self._target)
 
     def expand(self, activate: bool = False) -> None:
@@ -914,10 +1086,8 @@ class SidebarWindow(QWidget):
             self.show()
         if self._target != 1.0:
             self._target = 1.0
-            self.anim.stop()
-            self.anim.setStartValue(self.progress)
-            self.anim.setEndValue(1.0)
-            self.anim.start()
+            self._start_slide(1.0)
+            self.syncer.sync_soon()          # pick up phone edits when opening
         self.raise_()
         if activate:
             self.activateWindow()
@@ -938,10 +1108,8 @@ class SidebarWindow(QWidget):
                 w.lock()
         if self._alerts:
             self.reshow_timer.start()
-        self.anim.stop()
-        self.anim.setStartValue(self.progress)
-        self.anim.setEndValue(0.0)
-        self.anim.start()
+        self._start_slide(0.0)
+        QTimer.singleShot(ANIM_MS + 50, self._apply_stale)
 
     def toggle(self) -> None:
         if self._target >= 1.0:
@@ -949,9 +1117,15 @@ class SidebarWindow(QWidget):
         else:
             self.expand(activate=True)
 
+    def _end_slide(self) -> None:
+        if self._sliding:
+            self._sliding = False
+            self.ghost.hide()
+            self.ghost.clear()
+
     def _anim_finished(self) -> None:
-        if self._target == 0.0:
-            self.panel.hide()
+        self._end_slide()
+        self._set_progress(self._target)
 
     def snap_to(self, global_pos: QPoint) -> None:
         scr = QGuiApplication.screenAt(global_pos) or self._screen()
@@ -983,7 +1157,7 @@ class SidebarWindow(QWidget):
         super().leaveEvent(e)
 
     def _hover_open(self) -> None:
-        if self.geometry().contains(QCursor.pos()) and QApplication.mouseButtons() == Qt.NoButton:
+        if self._cursor_inside() and QApplication.mouseButtons() == Qt.NoButton:
             self.expand()
 
     def _strip_clicked(self) -> None:
@@ -1008,7 +1182,7 @@ class SidebarWindow(QWidget):
         return False
 
     def _maybe_collapse(self) -> None:
-        if self._keep_open() or self.geometry().contains(QCursor.pos()):
+        if self._keep_open() or self._cursor_inside():
             return
         focus = QApplication.focusWidget()
         editing = (self.isActiveWindow() and focus is not None and self.isAncestorOf(focus)
@@ -1024,7 +1198,7 @@ class SidebarWindow(QWidget):
             QTimer.singleShot(150, self._collapse_if_inactive)
 
     def _collapse_if_inactive(self) -> None:
-        if self.isActiveWindow() or self._keep_open() or self.geometry().contains(QCursor.pos()):
+        if self.isActiveWindow() or self._keep_open() or self._cursor_inside():
             return
         self.collapse()
 
@@ -1046,18 +1220,45 @@ class SidebarWindow(QWidget):
         else:
             m.addAction(make_icon("focus", self.p.muted), "Stop focus session", self.stop_focus)
         m.addSeparator()
+        m.addAction("Phone sync…", self.open_sync)
+        m.addSeparator()
         m.addAction("Export backup…", self.export_backup)
         m.addAction("Restore backup…", self.restore_backup)
         m.addAction("Export as Markdown…", self.export_markdown)
         m.addAction("Open data folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.data_dir))))
         m.addSeparator()
+        if updater.repo_root() is not None:
+            m.addAction("Update and restart", self.update_and_restart)
+            errors = self.data_dir / "error.log"
+            if errors.exists() and errors.stat().st_size:
+                m.addAction("View error log", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(errors))))
+            log = self.data_dir / "update.log"
+            if log.exists():
+                m.addAction("View update log", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(log))))
         m.addAction("Hide sidebar", lambda: self.collapse(force=True))
         m.addAction("Quit Sidebar", QApplication.quit)
+
+    def place_beside(self, dlg: QWidget) -> None:
+        """Put a dialog next to the open panel instead of on top of it."""
+        scr = self._screen().availableGeometry()
+        full = self._full_rect()
+        size = dlg.sizeHint().expandedTo(dlg.size())
+        w, h = size.width() + 16, size.height() + 40        # allow for the title bar and border
+        gap = 12
+        x = full.left() - w - gap if self.edge == "right" else full.right() + gap
+        x = max(scr.left(), min(x, scr.right() - w))
+        y = max(scr.top(), scr.top() + (scr.height() - h) // 3)
+        dlg.move(x, y)
+
+    def update_and_restart(self) -> None:
+        """Close, pull the latest version from git, and start again."""
+        self.restart_after_update = True
+        QApplication.quit()
 
     def open_settings(self) -> None:
         self.expand(activate=True)
         dlg = dialogs.SettingsDialog(self, self.s, str(self.data_dir))
-        if dlg.exec() != dlg.Accepted:
+        if dialogs.run(dlg) != QDialog.DialogCode.Accepted:
             return
         values = dlg.values()
         old_top = self.s["always_on_top"]
@@ -1068,7 +1269,8 @@ class SidebarWindow(QWidget):
             try:
                 winplatform.set_startup_enabled(dlg.startup_enabled())
             except OSError as exc:
-                QMessageBox.warning(self, "Start with Windows", f"Could not update the startup entry:\n{exc}")
+                dialogs.message(self, "Start with Windows",
+                                f"Windows did not accept the startup entry.\n\n{exc}", "warning")
         if old_top != self.s["always_on_top"]:
             self._apply_flags()
             self.show()
@@ -1081,10 +1283,10 @@ class SidebarWindow(QWidget):
     def export_backup(self) -> None:
         include = False
         if any(w.card.type == "secret" for w in self.list.widgets.values()):
-            include = QMessageBox.question(
+            include = dialogs.message(
                 self, "Export backup",
                 "Include secret notes?\nThey stay encrypted and can only be opened with their PIN "
-                "on this Windows account.") == QMessageBox.Yes
+                "on this Windows account.", "question", ("Include", "Leave out")) == "Include"
         path, _ = QFileDialog.getSaveFileName(
             self, "Export backup", str(Path.home() / f"sidebar-backup-{datetime.now():%Y%m%d}.json"),
             "Sidebar backup (*.json)")
@@ -1102,7 +1304,7 @@ class SidebarWindow(QWidget):
         try:
             added = backup.import_json(self.db, Path(path), self.assets_dir, self.backup_dir)
         except (ValueError, OSError, KeyError) as exc:
-            QMessageBox.warning(self, "Restore backup", f"Could not restore this file:\n{exc}")
+            dialogs.message(self, "Restore backup", f"Could not restore this file:\n{exc}", "warning")
             return
         known = set(self.list.widgets)
         for card in self.db.cards():
@@ -1111,7 +1313,7 @@ class SidebarWindow(QWidget):
         self.list.order = [c.id for c in self.db.cards()]
         self._rebuild_tabs()
         self.refresh()
-        QMessageBox.information(self, "Restore backup",
+        dialogs.message(self, "Restore backup",
                                 f"Added {added} note{'s' if added != 1 else ''}. Existing notes were left unchanged.")
 
     def export_markdown(self) -> None:
@@ -1134,6 +1336,8 @@ class SidebarWindow(QWidget):
         for b in self.view_btns.values():
             retint(b, self.p)
         self.list.set_indicator_color(self.p.accent)
+        self.quickbar.apply_theme(self.p)
+        self.quickbar.setVisible(bool(self.s["show_quickbar"]))
         for w in self.list.widgets.values():
             w.apply_theme()
         self.strip.update()
@@ -1176,8 +1380,10 @@ class SidebarWindow(QWidget):
             QTimer.singleShot(0, self.register_hotkey)
 
     def shutdown(self) -> None:
+        self.quickbar.shutdown()
         for w in self.list.widgets.values():
             w.flush()
+        self.syncer.shutdown()                # upload the last edits before closing
         if self._hotkey_hwnd is not None:
             winplatform.unregister_hotkey(self._hotkey_hwnd)
             self._hotkey_hwnd = None

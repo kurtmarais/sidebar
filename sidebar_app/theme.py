@@ -319,6 +319,15 @@ def _draw(name: str, color: QColor, size: int, scale: int) -> QPixmap:
     elif name == "focus":
         p.drawEllipse(QPointF(c, c), s * 0.32, s * 0.32)
         _poly(p, S(0.5, 0.3), S(0.5, 0.5), S(0.64, 0.6))
+    elif name == "headphones":
+        path = QPainterPath(QPointF(*S(0.2, 0.62)))
+        path.lineTo(QPointF(*S(0.2, 0.5)))
+        path.cubicTo(QPointF(*S(0.2, 0.1)), QPointF(*S(0.8, 0.1)), QPointF(*S(0.8, 0.5)))
+        path.lineTo(QPointF(*S(0.8, 0.62)))
+        p.drawPath(path)
+        p.setBrush(color)
+        p.drawRoundedRect(QRectF(*S(0.14, 0.56, 0.16, 0.26)), 2, 2)
+        p.drawRoundedRect(QRectF(*S(0.7, 0.56, 0.16, 0.26)), 2, 2)
     elif name == "note":
         _poly(p, S(0.24, 0.16), S(0.62, 0.16), S(0.78, 0.32), S(0.78, 0.84), S(0.24, 0.84), close=True)
         _poly(p, S(0.36, 0.5), S(0.64, 0.5))
@@ -343,6 +352,25 @@ def _draw(name: str, color: QColor, size: int, scale: int) -> QPixmap:
         _poly(p, S(0.42, 0.58), S(0.58, 0.42))
         p.drawRoundedRect(QRectF(*S(0.14, 0.5, 0.36, 0.22)), s * 0.1, s * 0.1)
         p.drawRoundedRect(QRectF(*S(0.5, 0.28, 0.36, 0.22)), s * 0.1, s * 0.1)
+    elif name == "play":
+        p.setPen(Qt.NoPen)
+        p.setBrush(color)
+        path = QPainterPath(QPointF(*S(0.32, 0.2)))
+        path.lineTo(QPointF(*S(0.8, 0.5)))
+        path.lineTo(QPointF(*S(0.32, 0.8)))
+        path.closeSubpath()
+        p.drawPath(path)
+    elif name == "stop":
+        p.setPen(Qt.NoPen)
+        p.setBrush(color)
+        p.drawRoundedRect(QRectF(*S(0.26, 0.26, 0.48, 0.48)), 2, 2)
+    elif name == "power":
+        path = QPainterPath()
+        ring = QRectF(*S(0.18, 0.2, 0.64, 0.64))
+        path.arcMoveTo(ring, 120)
+        path.arcTo(ring, 120, 300)
+        p.drawPath(path)
+        _poly(p, S(0.5, 0.12), S(0.5, 0.46))
     elif name == "secret":
         return _draw("lock", color, size, scale)
     p.end()

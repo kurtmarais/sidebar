@@ -20,7 +20,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu,
-    QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QTextEdit, QToolButton,
+    QPlainTextEdit, QPushButton, QSizePolicy, QTextEdit, QToolButton,
     QVBoxLayout, QWidget,
 )
 
@@ -1496,10 +1496,4 @@ class CardWidget(QFrame):
 
 
 def confirm(parent: QWidget, title: str, text: str, ok: str = "Delete") -> bool:
-    box = QMessageBox(parent)
-    box.setWindowTitle(title)
-    box.setText(text)
-    yes = box.addButton(ok, QMessageBox.AcceptRole)
-    box.addButton("Cancel", QMessageBox.RejectRole)
-    box.exec()
-    return box.clickedButton() is yes
+    return dialogs.message(parent, title, text, "question", (ok, "Cancel")) == ok

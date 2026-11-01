@@ -2,14 +2,51 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 from PySide6.QtCore import QDate, QDateTime, Qt, QTime
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QCalendarWidget, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QSpinBox, QTimeEdit, QVBoxLayout, QWidget,
+    QCalendarWidget, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QTimeEdit, QVBoxLayout, QWidget,
 )
 
-from . import winplatform
+from . import updater, winplatform
+
+# The sidebar stays above other windows, so its dialogs must too, and they
+# open beside the panel rather than on top of it. The window installs the
+# placement function at start-up.
+_placer: Callable[[QWidget], None] | None = None
+
+
+def set_placer(fn: Callable[[QWidget], None] | None) -> None:
+    global _placer
+    _placer = fn
+
+
+def run(dlg: QDialog) -> int:
+    """Show a dialog modally, on top and beside the sidebar."""
+    dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    dlg.adjustSize()
+    if _placer is not None:
+        _placer(dlg)
+    return dlg.exec()
+
+
+def message(parent: QWidget | None, title: str, text: str, kind: str = "info",
+            buttons: tuple[str, ...] = ("OK",)) -> str:
+    """Message box that respects the sidebar's stacking. Returns the clicked label."""
+    box = QMessageBox(parent)
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setIcon({"warning": QMessageBox.Warning, "question": QMessageBox.Question}.get(kind, QMessageBox.Information))
+    made = []
+    for i, label in enumerate(buttons):
+        role = QMessageBox.AcceptRole if i == 0 else QMessageBox.RejectRole
+        made.append(box.addButton(label, role))
+    run(box)
+    clicked = box.clickedButton()
+    return clicked.text() if clicked is not None else buttons[-1]
 
 
 def _buttons(dialog: QDialog, ok_text: str = "OK") -> QDialogButtonBox:
@@ -52,7 +89,7 @@ class DatePickerDialog(QDialog):
 def pick_date(parent: QWidget | None, title: str, initial: QDate | None = None) -> QDate | None:
     start = QDateTime(initial or QDate.currentDate(), QTime(9, 0))
     dlg = DatePickerDialog(parent, title, start, with_time=False)
-    return dlg.value().date() if dlg.exec() == QDialog.Accepted else None
+    return dlg.value().date() if run(dlg) == QDialog.Accepted else None
 
 
 def pick_datetime(parent: QWidget | None, title: str, initial: QDateTime | None = None) -> QDateTime | None:
@@ -60,7 +97,7 @@ def pick_datetime(parent: QWidget | None, title: str, initial: QDateTime | None 
         initial = QDateTime.currentDateTime().addSecs(3600)
         initial.setTime(QTime(initial.time().hour(), 0))
     dlg = DatePickerDialog(parent, title, initial, with_time=True)
-    return dlg.value() if dlg.exec() == QDialog.Accepted else None
+    return dlg.value() if run(dlg) == QDialog.Accepted else None
 
 
 def ask_text(parent: QWidget | None, title: str, label: str, text: str = "") -> str | None:
@@ -75,7 +112,7 @@ def ask_text(parent: QWidget | None, title: str, label: str, text: str = "") -> 
     lay.addWidget(edit)
     lay.addWidget(_buttons(dlg))
     dlg.setMinimumWidth(320)
-    if dlg.exec() != QDialog.Accepted:
+    if run(dlg) != QDialog.Accepted:
         return None
     return edit.text().strip()
 
@@ -146,6 +183,25 @@ class SettingsDialog(QDialog):
         self.focus.setValue(int(settings["focus_minutes"]))
         form.addRow("Focus session", self.focus)
 
+        self.quickbar = QCheckBox("Show focus sound and app tiles")
+        self.quickbar.setChecked(bool(settings["show_quickbar"]))
+        form.addRow("Quick tiles", self.quickbar)
+
+        self.sound_url = QLineEdit(settings["focus_sound_url"])
+        self.sound_url.setPlaceholderText("https://www.youtube.com/watch?v=…")
+        form.addRow("Focus sound link", self.sound_url)
+        self.sound_name = QLineEdit(settings["focus_sound_name"])
+        form.addRow("Focus sound name", self.sound_name)
+
+        app_row = QHBoxLayout()
+        self.app_path = QLineEdit(settings["launch_app_path"])
+        self.app_path.setPlaceholderText("Found automatically: caffeine64.exe")
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self._browse_app)
+        app_row.addWidget(self.app_path, 1)
+        app_row.addWidget(browse)
+        form.addRow("App to start", app_row)
+
         self.on_top = QCheckBox("Keep above other windows")
         self.on_top.setChecked(bool(settings["always_on_top"]))
         form.addRow("", self.on_top)
@@ -173,6 +229,15 @@ class SettingsDialog(QDialog):
         self.startup.setEnabled(winplatform.IS_WINDOWS)
         form.addRow("", self.startup)
 
+        self.auto_update = QCheckBox("Update automatically when the sidebar closes")
+        git_install = updater.repo_root() is not None
+        self.auto_update.setChecked(bool(settings["auto_update"]) and git_install)
+        self.auto_update.setEnabled(git_install)
+        self.auto_update.setToolTip("Runs git pull in the install folder after closing; the next launch uses "
+                                    "the new version." if git_install else
+                                    "Only available when the app was installed with git clone.")
+        form.addRow("", self.auto_update)
+
         lay.addLayout(form)
         path = QLabel(f"Notes are stored only on this PC, in:\n{data_dir}")
         path.setProperty("muted", True)
@@ -181,8 +246,19 @@ class SettingsDialog(QDialog):
         lay.addWidget(path)
         lay.addWidget(_buttons(self, "Save"))
 
+    def _browse_app(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Choose the program to start",
+                                              self.app_path.text() or "", "Programs (*.exe);;All files (*)")
+        if path:
+            self.app_path.setText(path)
+
     def values(self) -> dict:
         return {
+            "show_quickbar": self.quickbar.isChecked(),
+            "auto_update": self.auto_update.isChecked() if self.auto_update.isEnabled() else True,
+            "focus_sound_url": self.sound_url.text().strip() or "https://www.youtube.com/watch?v=co7KgV2edvI",
+            "focus_sound_name": self.sound_name.text().strip() or "Focus sound",
+            "launch_app_path": self.app_path.text().strip(),
             "title": self.title.text().strip() or "My Desktop",
             "edge": self.edge.currentData(),
             "screen": self.screen.currentData(),

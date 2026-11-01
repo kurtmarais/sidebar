@@ -12,6 +12,11 @@ The design and feature set follow [Notiq](https://notiq-app.com/), without its A
 - Drag the strip up or down to move it. Drag the panel header to the other side of the screen, or to another monitor, and it snaps there.
 - The strip covers only part of the edge, so it never catches the cursor in screen corners or on window close buttons.
 
+**Quick tiles** (top of the panel)
+- **Focus sound**: plays a YouTube video's sound inside the app, and keeps playing while the sidebar is hidden. The default is a 10-hour airplane cabin recording ([link](https://www.youtube.com/watch?v=co7KgV2edvI)). Click to play or stop. Right-click to change the video, open it in your browser, or always use the browser instead.
+- **App launcher**: starts a program and shows whether it is running. The default is `caffeine64.exe`, which it looks for on PATH, in Downloads, Desktop, Documents and Program Files (including one sub-folder deep). Click again to close the program. If it isn't found, the first click asks where it is. Right-click to choose a different program or rename the tile.
+- Both tiles can also be set up in Settings, or hidden there.
+
 **Card types** (**+ New**)
 
 | Type | What it holds |
@@ -52,6 +57,8 @@ Dropping `.py`, `.js`, `.sql`, `.json` or `.txt` files creates a Code card.
 
 **Settings** (gear icon): side, monitor, panel width, dark or light theme, open by hover and/or click, open delay, strip length, focus length, keep on top, Ctrl+Shift+S, notes that follow your window, meeting notes, and **Start with Windows**. Start with Windows is also what keeps reminders working, since the app must be running to alert you.
 
+**Phone sync** (optional): edit your notes, checklists, code and links cards from your phone through your own Supabase project. It works while the PC is off. Set it up with [docs/phone-sync.md](docs/phone-sync.md), then turn it on under gear → **Phone sync…**.
+
 ## Keyboard
 
 | Keys | Action |
@@ -74,6 +81,31 @@ py run_sidebar.py
 Use `py` (the launcher installed with Python from python.org) rather than `python`: on some PCs `python` points at a copy bundled with another app, such as Inkscape, that has no pip.
 
 `--data-dir <folder>` or the `SIDEBAR_DATA_DIR` environment variable stores notes somewhere else, for example a synced folder.
+
+## Install with Git and update later
+
+Use Git once to set up the folder. After that, a single command fetches each new version.
+
+1. Install Git from https://git-scm.com/download/win (the default options are fine).
+2. Open PowerShell in the folder where you want the app, for example your Desktop:
+   ```powershell
+   cd $HOME\Desktop
+   git clone -b claude/new-session-wmu4rs https://github.com/kurtmarais/sidebar.git
+   cd sidebar
+   py -m pip install -r requirements.txt
+   pyw run_sidebar.py
+   ```
+3. To update later, quit the sidebar (tray icon → Quit), then:
+   ```powershell
+   cd $HOME\Desktop\sidebar
+   git pull
+   py -m pip install -r requirements.txt
+   pyw run_sidebar.py
+   ```
+
+Your notes live in `%APPDATA%\Sidebar`, not in this folder, so updating or deleting the folder never touches them.
+
+**Automatic updates.** In a git install, closing the sidebar (tray icon → Quit, or shutting down Windows) starts a background `git pull`, and the next launch runs the new version. Dependencies are reinstalled only when `requirements.txt` changes. **Update and restart** in the tray or gear menu does the same and then reopens the sidebar. Updates that would overwrite your own local edits are skipped. Each run is logged in `%APPDATA%\Sidebar\update.log` (gear menu → View update log). This can be turned off in Settings. The standalone `.exe` does not self-update.
 
 ## Build a standalone .exe
 
@@ -103,6 +135,12 @@ sidebar_app/
   storage.py       SQLite schema and data access
   backup.py        snapshots, JSON backup and restore, Markdown export
   secrets_store.py PIN-protected encryption for secret notes
+  quickbar.py      focus-sound and app-launcher tiles
+  updater.py       git pull on close / "Update and restart"
+  sync.py          Supabase sync engine (newest edit wins, per card)
+  sync_qt.py       background sync and the Phone sync dialog
+supabase/migrations/ database tables and access rules for Supabase
+web/               the phone app (static files: deploy the folder as-is)
   winplatform.py   Windows APIs: startup entry, hotkey, front window, DPAPI, meeting detection
   dialogs.py       settings and date pickers
   theme.py         colours, stylesheet, drawn icons
