@@ -54,13 +54,14 @@ async function main() {
     await page.evaluate(() => window.__sidebar.syncNow());
     await page.waitForSelector(".card-title:has-text('Edited on PC')", { timeout: 15000 });
     out.titles = await page.$$eval(".card-title", (els) => els.map((e) => e.textContent));
-    // archive one card with a full right swipe, delete another from inside the note
+    // archive one card with a full left swipe, delete another from inside the note
     const cdp = await ctx.newCDPSession(page);
     const bx = await page.locator(".card-wrap:has(.card-title:has-text('Edited on PC'))").boundingBox();
     const y = bx.y + 18;
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: bx.x + 40, y }] });
+    const x0 = bx.x + bx.width - 40;
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: x0, y }] });
     for (let i = 1; i <= 14; i++) {
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: bx.x + 40 + bx.width * 0.8 * i / 14, y }] });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x0 - bx.width * 0.8 * i / 14, y }] });
       await page.waitForTimeout(12);
     }
     await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });

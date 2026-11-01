@@ -1,6 +1,6 @@
 // Keeps the app itself available offline. Notes are not cached here (they live in
 // the app's own storage); requests to Supabase always go to the network.
-const CACHE = "sidebar-shell-v4";
+const CACHE = "sidebar-shell-v5";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "supabase.js", "config.js",
   "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png"];
 

@@ -321,16 +321,31 @@ function cardEl(c) {
   const archiving = !c.archived;
   const wrap = h("div", { class: "card-wrap", "data-uid": c.uid },
     h("div", { class: "swipe-bg" },
-      h("span", { class: "act left" }, archiving ? "Archive" : "Restore"),
-      h("span", { class: "act right" }, c.starred ? "☆ Unstar" : "★ Star")),
+      h("span", { class: "act left" }, c.starred ? "☆ Unstar" : "★ Star"),
+      h("span", { class: "act right" }, archiving ? "Archive" : "Restore")),
     card);
   card.addEventListener("click", () => { if (!wrap.dataset.noclick) openEditor(c.uid); });
   attachGestures(wrap, card, c);
   return wrap;
 }
 
+// ---------------------------------------------------------------- haptics
+// iPhone web apps have no vibration API. Since iOS 18, Safari plays the system
+// haptic when a switch control is toggled, so a hidden switch is flipped instead.
+// Android and other browsers use navigator.vibrate. Silent where neither exists.
+let hapticLabel = null;
+function haptic() {
+  if (navigator.vibrate && navigator.vibrate(8)) return;
+  if (!hapticLabel) {
+    const input = h("input", { type: "checkbox", switch: true, id: "haptic-switch", tabindex: "-1", "aria-hidden": "true" });
+    hapticLabel = h("label", { for: "haptic-switch", class: "haptic", "aria-hidden": "true" }, input);
+    document.body.append(hapticLabel);
+  }
+  hapticLabel.click();
+}
+
 // ---------------------------------------------------------------- gestures
-// Swipe right all the way: archive (restore in Archive). Swipe left all the way:
+// Swipe left all the way: archive (restore in Archive). Swipe right all the way:
 // star / unstar. A partial swipe springs back and does nothing. Press and hold,
 // then drag: reorder (Notes view, no search). Vertical movement scrolls as usual.
 let gesture = null;                     // the active swipe or drag, if any
@@ -370,6 +385,8 @@ function attachGestures(wrap, card, c) {
     if (start.mode === "swipe") {
       card.style.transform = `translateX(${dx}px)`;
       const full = Math.abs(dx) > wrap.offsetWidth * FULL_SWIPE;
+      if (full !== !!start.full) haptic();       // tick when it will act, and when you pull back
+      start.full = full;
       bg.className = "swipe-bg " + (dx > 0 ? "show-left" : "show-right") + (full ? " full" : "");
     } else if (start.mode === "drag") {
       moveDrag(e);
@@ -383,8 +400,8 @@ function attachGestures(wrap, card, c) {
     if (mode === "swipe") {
       noClick();
       const full = !cancelled && Math.abs(dx) > wrap.offsetWidth * FULL_SWIPE;
-      if (full && dx > 0) archiveWithAnimation(wrap, card, c);
-      else if (full) starWithAnimation(wrap, card, c);
+      if (full && dx > 0) starWithAnimation(wrap, card, c);
+      else if (full) archiveWithAnimation(wrap, card, c);
       else springBack(wrap, card);
     } else if (mode === "drag") {
       noClick();
@@ -405,7 +422,7 @@ function attachGestures(wrap, card, c) {
       startY: e.clientY, scroll0: window.scrollY, height: wrap.offsetHeight + gap,
       mids: items.map((el) => el.getBoundingClientRect().top + window.scrollY + el.offsetHeight / 2) };
     wrap.classList.add("dragging");
-    navigator.vibrate?.(10);
+    haptic();
   }
 }
 
@@ -475,7 +492,7 @@ function springBack(wrap, card) {
 
 function archiveWithAnimation(wrap, card, c) {
   card.classList.add("settle");
-  card.style.transform = "translateX(110%)";
+  card.style.transform = "translateX(-110%)";
   setTimeout(() => {
     wrap.style.height = wrap.offsetHeight + "px";
     wrap.classList.add("collapse");

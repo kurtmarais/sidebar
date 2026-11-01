@@ -60,17 +60,19 @@ header h1 { font-size: 22px; margin: 0; flex: 1; }
 .card-title { font-weight: 650; font-size: 16px; overflow-wrap: anywhere; flex: 1; min-width: 0; }
 .tags { display: flex; gap: 4px; flex: none; max-width: 55%; flex-wrap: wrap; justify-content: flex-end; }
 
-/* swipe backgrounds: archive (right swipe) and star (left swipe) */
+/* swipe backgrounds: star (right swipe) and archive (left swipe) */
 .swipe-bg { position: absolute; inset: 0; border-radius: var(--radius); display: flex; align-items: center;
   justify-content: space-between; padding: 0 18px; font-weight: 700; font-size: 14px; opacity: 0; }
 .card-wrap.swiping .swipe-bg { opacity: 1; }
 .swipe-bg .act { opacity: 0; transition: opacity .12s, transform .15s; }
-.swipe-bg.show-left { background: color-mix(in srgb, #4ade80 30%, var(--surface)); }
+.swipe-bg.show-left { background: color-mix(in srgb, var(--accent) 30%, var(--surface)); }
 .swipe-bg.show-left .left, .swipe-bg.show-right .right { opacity: .55; }
-.swipe-bg.show-right { background: color-mix(in srgb, var(--accent) 30%, var(--surface)); }
+.swipe-bg.show-right { background: color-mix(in srgb, #4ade80 30%, var(--surface)); }
 .swipe-bg.full .left, .swipe-bg.full .right { opacity: 1; transform: scale(1.08); }
-.swipe-bg.full.show-left { background: #22c55e; color: #052e14; }
-.swipe-bg.full.show-right { background: var(--accent); color: var(--accent-text); }
+.swipe-bg.full.show-left { background: var(--accent); color: var(--accent-text); }
+.swipe-bg.full.show-right { background: #22c55e; color: #052e14; }
+/* hidden switch used only to trigger iOS haptics */
+.haptic { position: fixed; left: -100px; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; overflow: hidden; }
 
 /* hold-and-drag reordering */
 .card-wrap.dragging { z-index: 5; transition: none; }

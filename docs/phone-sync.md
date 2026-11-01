@@ -66,7 +66,7 @@ Every push to that branch redeploys the app automatically.
 ## Using the phone app
 
 - Tap a card to open it. **‹ Back** (top left) and **Done** (top right) both close it; your changes save as you type. A new note you leave empty is dropped.
-- **Swipe a card right all the way** to archive it (in Archive: to restore it). **Swipe left all the way** to star or unstar it. A partial swipe springs back and does nothing.
+- **Swipe a card left all the way** to archive it (in Archive: to restore it). **Swipe right all the way** to star or unstar it. A partial swipe springs back and does nothing. You feel a haptic tick the moment a swipe goes far enough to act (iPhone: iOS 18 or later), and again if you pull back.
 - **Press and hold a card, then drag** to change the order (Notes view, when not searching).
 - Starred cards have a gold outline and ★. The sidebar on the PC shows the star too, and has **Star / Unstar** in the card menu.
 - Delete a note from inside it: **Delete note** at the bottom.

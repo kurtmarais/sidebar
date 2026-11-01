@@ -10,7 +10,15 @@ async function main() {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("dialog", (d) => d.accept());
+  // Behave like iOS (no vibration API) and count haptic ticks from the hidden switch.
+  await ctx.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, "vibrate", { value: undefined, configurable: true });
+    window.__haptics = 0;
+    const click = HTMLLabelElement.prototype.click;
+    HTMLLabelElement.prototype.click = function () { if (this.classList.contains("haptic")) window.__haptics++; return click.call(this); };
+  });
   const cdp = await ctx.newCDPSession(page);
+  const haptics = () => page.evaluate(() => window.__haptics);
   const out = { errors };
   const S = () => page.evaluate(() => window.__sidebar.state());
   const titles = () => page.$$eval("#list .card-title", (els) => els.map((e) => e.textContent));
@@ -32,7 +40,7 @@ async function main() {
   }
   async function swipe(title, fraction) {
     const b = await cardBox(title);
-    const y = b.y + 18, x = b.x + b.width / 2;
+    const y = b.y + 18, x = fraction < 0 ? b.x + b.width - 20 : b.x + 20;   // start from the far side
     await touch(x, y, x + b.width * fraction, y);
   }
 
@@ -54,17 +62,21 @@ async function main() {
   // no delete controls in the list
   out.deleteInList = await page.$$eval("#list button", (bs) => bs.some((b) => /delete/i.test(b.textContent)));
 
-  // partial right swipe: nothing; full right swipe: archive
-  await swipe("Alpha", 0.3);
+  // partial left swipe: nothing (and no haptic); full left swipe: archive (one tick at the threshold)
+  let h0 = await haptics();
+  await swipe("Alpha", -0.3);
   out.partialRight = (await titles()).includes("Alpha");      // still in the list
-  await swipe("Alpha", 0.75);
+  out.hapticsPartial = (await haptics()) - h0;
+  h0 = await haptics();
+  await swipe("Alpha", -0.75);
+  out.hapticsFull = (await haptics()) - h0;
   out.afterFullRight = await titles();
   out.alphaArchived = Object.values((await S()).cards).find((c) => c.title === "Alpha").archived;
 
-  // partial left swipe: nothing; full left swipe: star; again: unstar
-  await swipe("Beta", -0.3);
+  // partial right swipe: nothing; full right swipe: star
+  await swipe("Beta", 0.3);
   out.betaAfterPartial = Object.values((await S()).cards).find((c) => c.title === "Beta").starred;
-  await swipe("Beta", -0.75);
+  await swipe("Beta", 0.75);
   out.betaStarred = Object.values((await S()).cards).find((c) => c.title === "Beta").starred;
   out.starVisible = await page.locator(".card-wrap:has(.card-title:text-is('Beta')) .star").count();
   if (shots) await page.screenshot({ path: shots + "/g-starred.png" });
@@ -72,7 +84,9 @@ async function main() {
   // hold and drag Delta above Beta
   const before = await titles();
   const d = await cardBox("Delta"), bb = await cardBox("Beta");
+  h0 = await haptics();
   await touch(d.x + 60, d.y + 20, d.x + 60, bb.y + 4, { hold: 500, steps: 20 });
+  out.hapticsDrag = (await haptics()) - h0;
   out.reorder = { before, after: await titles() };
 
   // a vertical swipe on a card must not archive, star or reorder

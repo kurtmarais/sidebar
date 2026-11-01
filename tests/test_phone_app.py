@@ -99,8 +99,11 @@ def test_phone_gestures_and_editor(tmp_path, no_star_column):
         assert out["start"] == ["Alpha", "Beta", "Gamma", "Delta"]
         assert out["tagsInline"] and not out["deleteInList"]
         assert out["partialRight"] is True and "Alpha" not in out["afterFullRight"]
-        assert out["alphaArchived"] is True                      # full right swipe archived
-        assert out["betaAfterPartial"] is False                  # partial left swipe did nothing
+        assert out["alphaArchived"] is True                      # full LEFT swipe archived
+        assert out["betaAfterPartial"] is False                  # partial right swipe did nothing
+        assert out["hapticsPartial"] == 0                        # no tick before the threshold
+        assert out["hapticsFull"] == 1                           # one tick on crossing it
+        assert out["hapticsDrag"] == 1                           # tick when a card is picked up
         assert out["betaStarred"] is True and out["starVisible"] == 1
         assert out["reorder"]["after"] == ["Delta", "Beta", "Gamma"], out["reorder"]
         assert out["afterScroll"] == out["reorder"]["after"]     # vertical move changed nothing
