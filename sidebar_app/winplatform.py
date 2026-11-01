@@ -117,6 +117,34 @@ def is_hotkey_message(message_ptr: int) -> bool:
     return msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID
 
 
+# -------------------------------------------------------------- processes
+def _run_hidden(args: list[str]) -> str:
+    import subprocess
+    flags = 0x08000000 if sys.platform == "win32" else 0   # CREATE_NO_WINDOW
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, timeout=5, creationflags=flags)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return ""
+    return out.stdout or ""
+
+
+def process_running(exe: str) -> bool:
+    """True if a process with this image name (e.g. caffeine64.exe) is running."""
+    if not exe:
+        return False
+    if IS_WINDOWS:
+        out = _run_hidden(["tasklist", "/FI", f"IMAGENAME eq {exe}", "/FO", "CSV", "/NH"])
+        return f'"{exe.lower()}"' in out.lower()
+    return bool(_run_hidden(["pgrep", "-x", exe]).strip())
+
+
+def kill_process(exe: str) -> None:
+    if IS_WINDOWS:
+        _run_hidden(["taskkill", "/IM", exe, "/F"])
+    else:
+        _run_hidden(["pkill", "-x", exe])
+
+
 # ------------------------------------------------------ foreground window
 def foreground_window() -> tuple[str, str, int] | None:
     """(process exe name, window title, pid) of the window in front."""

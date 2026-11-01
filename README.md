@@ -12,6 +12,11 @@ The design and feature set follow [Notiq](https://notiq-app.com/), without its A
 - Drag the strip up or down to move it. Drag the panel header to the other side of the screen, or to another monitor, and it snaps there.
 - The strip covers only part of the edge, so it never catches the cursor in screen corners or on window close buttons.
 
+**Quick tiles** (top of the panel)
+- **Focus sound**: plays a YouTube video's sound inside the app, and keeps playing while the sidebar is hidden. The default is a 10-hour airplane cabin recording ([link](https://www.youtube.com/watch?v=co7KgV2edvI)). Click to play or stop. Right-click to change the video, open it in your browser, or always use the browser instead.
+- **App launcher**: starts a program and shows whether it is running. The default is `caffeine64.exe`, which it looks for on PATH, in Downloads, Desktop, Documents and Program Files (including one sub-folder deep). Click again to close the program. If it isn't found, the first click asks where it is. Right-click to choose a different program or rename the tile.
+- Both tiles can also be set up in Settings, or hidden there.
+
 **Card types** (**+ New**)
 
 | Type | What it holds |
@@ -75,6 +80,29 @@ Use `py` (the launcher installed with Python from python.org) rather than `pytho
 
 `--data-dir <folder>` or the `SIDEBAR_DATA_DIR` environment variable stores notes somewhere else, for example a synced folder.
 
+## Install with Git and update later
+
+Use Git once to set up the folder. After that, a single command fetches each new version.
+
+1. Install Git from https://git-scm.com/download/win (the default options are fine).
+2. Open PowerShell in the folder where you want the app, for example your Desktop:
+   ```powershell
+   cd $HOME\Desktop
+   git clone -b claude/new-session-wmu4rs https://github.com/kurtmarais/sidebar.git
+   cd sidebar
+   py -m pip install -r requirements.txt
+   pyw run_sidebar.py
+   ```
+3. To update later, quit the sidebar (tray icon → Quit), then:
+   ```powershell
+   cd $HOME\Desktop\sidebar
+   git pull
+   py -m pip install -r requirements.txt
+   pyw run_sidebar.py
+   ```
+
+Your notes live in `%APPDATA%\Sidebar`, not in this folder, so updating or deleting the folder never touches them.
+
 ## Build a standalone .exe
 
 ```powershell
@@ -103,6 +131,7 @@ sidebar_app/
   storage.py       SQLite schema and data access
   backup.py        snapshots, JSON backup and restore, Markdown export
   secrets_store.py PIN-protected encryption for secret notes
+  quickbar.py      focus-sound and app-launcher tiles
   winplatform.py   Windows APIs: startup entry, hotkey, front window, DPAPI, meeting detection
   dialogs.py       settings and date pickers
   theme.py         colours, stylesheet, drawn icons

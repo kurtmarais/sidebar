@@ -39,6 +39,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "follow_window": True,        # notes that follow the window in front
     "suggest_meeting_notes": True,
     "focus_minutes": 25,
+    "show_quickbar": True,        # focus-sound and app-launcher tiles
+    "focus_sound_url": "https://www.youtube.com/watch?v=co7KgV2edvI",
+    "focus_sound_name": "Airplane cabin",
+    "focus_sound_browser": False, # True = open YouTube in the browser instead of playing in-app
+    "launch_app_path": "",        # "" = look for caffeine64.exe
+    "launch_app_name": "",
 }
 
 

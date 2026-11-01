@@ -31,6 +31,7 @@ from PySide6.QtGui import QDesktopServices
 
 from . import backup, dialogs, winplatform
 from .cardlist import VIEW_ARCHIVE, VIEW_CARDS, VIEW_TODAY, BoardTabBar, CardList, today_section
+from .quickbar import QuickBar
 from .cards import (
     CARD_KINDS, EXTENSION_LANGUAGES, CardEnv, CardWidget, confirm, icon_button, retint,
     tomorrow_at_nine,
@@ -243,6 +244,11 @@ class SidebarWindow(QWidget):
         h.addWidget(self.menu_btn)
         lay.addWidget(self.header)
 
+        # Quick tiles: focus sound + app launcher
+        self.quickbar = QuickBar(self.p, self.s.get, self._put_setting)
+        self.quickbar.setVisible(bool(self.s["show_quickbar"]))
+        lay.addWidget(self.quickbar)
+
         # View pills: Notes / Today / Archive
         views = QHBoxLayout()
         views.setSpacing(4)
@@ -346,6 +352,10 @@ class SidebarWindow(QWidget):
         QShortcut(QKeySequence("Escape"), self, self._escape)
         paste = QShortcut(QKeySequence.Paste, self.panel, self.paste)
         paste.setContext(Qt.WidgetWithChildrenShortcut)
+
+    def _put_setting(self, key: str, value) -> None:
+        self.s[key] = value
+        self.db.set_setting(key, value)
 
     # ============================================================== cards
     def load_cards(self) -> None:
@@ -1134,6 +1144,8 @@ class SidebarWindow(QWidget):
         for b in self.view_btns.values():
             retint(b, self.p)
         self.list.set_indicator_color(self.p.accent)
+        self.quickbar.apply_theme(self.p)
+        self.quickbar.setVisible(bool(self.s["show_quickbar"]))
         for w in self.list.widgets.values():
             w.apply_theme()
         self.strip.update()
@@ -1176,6 +1188,7 @@ class SidebarWindow(QWidget):
             QTimer.singleShot(0, self.register_hotkey)
 
     def shutdown(self) -> None:
+        self.quickbar.shutdown()
         for w in self.list.widgets.values():
             w.flush()
         if self._hotkey_hwnd is not None:

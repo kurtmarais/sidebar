@@ -70,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=__version__)
     args, qt_args = parser.parse_known_args(argv if argv is not None else sys.argv[1:])
 
+    QGuiApplication.setAttribute(Qt.AA_ShareOpenGLContexts)   # required by Qt WebEngine
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication([sys.argv[0], *qt_args])
     app.setApplicationName("Sidebar")

@@ -5,8 +5,8 @@ from __future__ import annotations
 from PySide6.QtCore import QDate, QDateTime, Qt, QTime
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QCalendarWidget, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QSpinBox, QTimeEdit, QVBoxLayout, QWidget,
+    QCalendarWidget, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+    QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from . import winplatform
@@ -146,6 +146,25 @@ class SettingsDialog(QDialog):
         self.focus.setValue(int(settings["focus_minutes"]))
         form.addRow("Focus session", self.focus)
 
+        self.quickbar = QCheckBox("Show focus sound and app tiles")
+        self.quickbar.setChecked(bool(settings["show_quickbar"]))
+        form.addRow("Quick tiles", self.quickbar)
+
+        self.sound_url = QLineEdit(settings["focus_sound_url"])
+        self.sound_url.setPlaceholderText("https://www.youtube.com/watch?v=…")
+        form.addRow("Focus sound link", self.sound_url)
+        self.sound_name = QLineEdit(settings["focus_sound_name"])
+        form.addRow("Focus sound name", self.sound_name)
+
+        app_row = QHBoxLayout()
+        self.app_path = QLineEdit(settings["launch_app_path"])
+        self.app_path.setPlaceholderText("Found automatically: caffeine64.exe")
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self._browse_app)
+        app_row.addWidget(self.app_path, 1)
+        app_row.addWidget(browse)
+        form.addRow("App to start", app_row)
+
         self.on_top = QCheckBox("Keep above other windows")
         self.on_top.setChecked(bool(settings["always_on_top"]))
         form.addRow("", self.on_top)
@@ -181,8 +200,18 @@ class SettingsDialog(QDialog):
         lay.addWidget(path)
         lay.addWidget(_buttons(self, "Save"))
 
+    def _browse_app(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Choose the program to start",
+                                              self.app_path.text() or "", "Programs (*.exe);;All files (*)")
+        if path:
+            self.app_path.setText(path)
+
     def values(self) -> dict:
         return {
+            "show_quickbar": self.quickbar.isChecked(),
+            "focus_sound_url": self.sound_url.text().strip() or "https://www.youtube.com/watch?v=co7KgV2edvI",
+            "focus_sound_name": self.sound_name.text().strip() or "Focus sound",
+            "launch_app_path": self.app_path.text().strip(),
             "title": self.title.text().strip() or "My Desktop",
             "edge": self.edge.currentData(),
             "screen": self.screen.currentData(),
