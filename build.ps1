@@ -2,7 +2,9 @@
 # Run from a PowerShell prompt in this folder:  .\build.ps1
 $ErrorActionPreference = "Stop"
 
-if (-not (Test-Path .venv)) { python -m venv .venv }
+# Prefer the Python launcher (py) so other apps' bundled Pythons (e.g. Inkscape) are not used.
+$py = if (Get-Command py -ErrorAction SilentlyContinue) { "py" } else { "python" }
+if (-not (Test-Path .venv)) { & $py -m venv .venv }
 .\.venv\Scripts\python -m pip install --upgrade pip
 .\.venv\Scripts\python -m pip install -r requirements-dev.txt
 

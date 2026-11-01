@@ -67,9 +67,11 @@ Dropping `.py`, `.js`, `.sql`, `.json` or `.txt` files creates a Code card.
 Requires Python 3.10+ on Windows 10 or 11.
 
 ```powershell
-python -m pip install -r requirements.txt
-python run_sidebar.py
+py -m pip install -r requirements.txt
+py run_sidebar.py
 ```
+
+Use `py` (the launcher installed with Python from python.org) rather than `python`: on some PCs `python` points at a copy bundled with another app, such as Inkscape, that has no pip.
 
 `--data-dir <folder>` or the `SIDEBAR_DATA_DIR` environment variable stores notes somewhere else, for example a synced folder.
 
