@@ -895,12 +895,15 @@ class SidebarWindow(QWidget):
         x = avail.right() + 1 - width if self.edge == "right" else avail.left()
         return QRect(x, avail.top(), width, avail.height())
 
-    def _geometry_for(self, progress: float) -> QRect:
-        """Window rect: just the strip when closed, full size while open or animating."""
-        return self._strip_rect() if progress <= 0 else self._full_rect()
+    def _geometry_for(self, _progress: float = 0.0) -> QRect:
+        """The window never changes size while in use. Resizing a translucent
+        window on Windows briefly shows the old picture at the new top-left,
+        which made the strip jump. Closed, everything but the strip is
+        transparent and masked out, so it neither shows nor catches clicks."""
+        return self._full_rect()
 
     def _panel_x(self, progress: float) -> int:
-        """Panel x inside the full-size window; it slides in from the screen edge."""
+        """Panel x inside the window; it slides in from the screen edge."""
         pw = int(self.s["panel_width"])
         full_w = STRIP_W + MARGIN + pw
         if self.edge == "right":
@@ -908,21 +911,44 @@ class SidebarWindow(QWidget):
         open_x, closed_x = STRIP_W + MARGIN, -pw
         return round(closed_x + (open_x - closed_x) * progress)
 
-    def _layout_children(self) -> None:
-        w, h = self.width(), self.height()
+    def _strip_local(self) -> QRect:
         strip = self._strip_rect()
-        # Use the intended window rect, not self.geometry(): on Windows a resize can be
-        # delivered before the move, and the strip would flash at the top of the screen.
-        sy = strip.top() - self._geometry_for(self.progress).top()
-        self.strip.setGeometry(w - STRIP_W if self.edge == "right" else 0, sy, STRIP_W, strip.height())
-        panel_rect = QRect(self._panel_x(max(self.progress, 0.0) if not self._sliding else 1.0),
-                           MARGIN, int(self.s["panel_width"]), max(0, h - 2 * MARGIN))
-        self.panel.setGeometry(panel_rect)
+        full = self._full_rect()
+        x = full.width() - STRIP_W if self.edge == "right" else 0
+        return QRect(x, strip.top() - full.top(), STRIP_W, strip.height())
+
+    def _panel_area(self) -> QRect:
+        """Where the open panel sits, in window coordinates."""
+        return QRect(self._panel_x(1.0), MARGIN, int(self.s["panel_width"]),
+                     max(0, self._full_rect().height() - 2 * MARGIN))
+
+    def _active_region(self) -> QRegion:
+        """The part of the window that is shown and receives the mouse."""
+        region = QRegion(self._strip_local())
+        if self.progress > 0 or self._sliding:
+            region = region.united(QRegion(self._panel_area()))
+        return region
+
+    def _apply_mask(self) -> None:
+        region = self._active_region()
+        if region != self.mask():
+            self.setMask(region)
+
+    def _cursor_inside(self) -> bool:
+        return self.isVisible() and self._active_region().contains(self.mapFromGlobal(QCursor.pos()))
+
+    def _layout_children(self) -> None:
+        self.strip.setGeometry(self._strip_local())
+        panel = self._panel_area()
         if self._sliding:
+            self.panel.setGeometry(panel)
             self.ghost.move(self._panel_x(self.progress), MARGIN)
         else:
+            panel.moveLeft(self._panel_x(max(self.progress, 0.0)))
+            self.panel.setGeometry(panel)
             self.panel.setVisible(self.progress > 0)
         self.strip.raise_()
+        self._apply_mask()
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
@@ -930,26 +956,28 @@ class SidebarWindow(QWidget):
 
     def _set_progress(self, value: float) -> None:
         self.progress = value
-        geo = self._geometry_for(value)
-        if self.geometry() != geo:
-            self.setGeometry(geo)          # only at the start of opening / end of closing
-            self._layout_children()
-            self.repaint()
         if self._sliding:
-            self.ghost.move(self._panel_x(value), MARGIN)   # cheap: move a picture, not the window
+            self.ghost.move(self._panel_x(value), MARGIN)   # cheap: move a picture
+            if value <= 0 and self._target == 0.0:
+                self._apply_mask()
         else:
             self._layout_children()
+
+    def _snapshot(self) -> QPixmap:
+        """Picture of the panel with transparent rounded corners."""
+        dpr = self.devicePixelRatioF()
+        size = self.panel.size()
+        pix = QPixmap(max(1, round(size.width() * dpr)), max(1, round(size.height() * dpr)))
+        pix.setDevicePixelRatio(dpr)
+        pix.fill(Qt.transparent)
+        self.panel.render(pix, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)
+        return pix
 
     def _start_slide(self, target: float) -> None:
         """Animate a snapshot of the panel; the real panel appears when it lands."""
         self.anim.stop()
-        self._sliding = False
-        if self.progress <= 0:
-            self.progress = 0.0001          # switch the window to full size before sliding
-            self.setGeometry(self._full_rect())
-            self._layout_children()
-            self.repaint()
-        self._layout_children()
+        self._end_slide()
+        self.panel.setGeometry(self._panel_area())
         self.panel.ensurePolished()
         if self.panel.layout() is not None:
             self.panel.layout().activate()
@@ -963,23 +991,17 @@ class SidebarWindow(QWidget):
             self.ghost.show()
             self.ghost.raise_()
             self.strip.raise_()
+        self._apply_mask()
         self.anim.setStartValue(self.progress)
         self.anim.setEndValue(target)
         self.anim.start()
 
-    def _snapshot(self) -> QPixmap:
-        """Picture of the panel with transparent rounded corners."""
-        dpr = self.devicePixelRatioF()
-        size = self.panel.size()
-        pix = QPixmap(max(1, round(size.width() * dpr)), max(1, round(size.height() * dpr)))
-        pix.setDevicePixelRatio(dpr)
-        pix.fill(Qt.transparent)
-        self.panel.render(pix, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)
-        return pix
-
     def reposition(self) -> None:
         self.anim.stop()
         self._end_slide()
+        rect = self._full_rect()
+        if self.geometry() != rect:
+            self.setGeometry(rect)
         self._set_progress(self._target)
 
     def expand(self, activate: bool = False) -> None:
@@ -1058,7 +1080,7 @@ class SidebarWindow(QWidget):
         super().leaveEvent(e)
 
     def _hover_open(self) -> None:
-        if self.geometry().contains(QCursor.pos()) and QApplication.mouseButtons() == Qt.NoButton:
+        if self._cursor_inside() and QApplication.mouseButtons() == Qt.NoButton:
             self.expand()
 
     def _strip_clicked(self) -> None:
@@ -1083,7 +1105,7 @@ class SidebarWindow(QWidget):
         return False
 
     def _maybe_collapse(self) -> None:
-        if self._keep_open() or self.geometry().contains(QCursor.pos()):
+        if self._keep_open() or self._cursor_inside():
             return
         focus = QApplication.focusWidget()
         editing = (self.isActiveWindow() and focus is not None and self.isAncestorOf(focus)
@@ -1099,7 +1121,7 @@ class SidebarWindow(QWidget):
             QTimer.singleShot(150, self._collapse_if_inactive)
 
     def _collapse_if_inactive(self) -> None:
-        if self.isActiveWindow() or self._keep_open() or self.geometry().contains(QCursor.pos()):
+        if self.isActiveWindow() or self._keep_open() or self._cursor_inside():
             return
         self.collapse()
 

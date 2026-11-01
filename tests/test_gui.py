@@ -45,16 +45,21 @@ def pump(app, n=5):
 
 
 def test_expand_collapse_geometry(app, win):
-    strip = win.geometry()
-    assert strip.width() == 6
+    """The window keeps one size; only its mask changes, so Windows never
+    has to show a resized window (the cause of the strip jumping)."""
+    full = win.geometry()
+    pw = int(win.s["panel_width"])
+    assert full.width() == 6 + pw + 8
+    strip_mask = win.mask().boundingRect()
+    assert strip_mask.width() == 6 and not win.panel.isVisible()
     win.expand()
     pump(app)
-    assert win.progress == 1.0
-    assert win.geometry().width() == 6 + int(win.s["panel_width"]) + 8
-    assert win.panel.isVisible()
+    assert win.progress == 1.0 and win.geometry() == full
+    assert win.panel.isVisible() and win.mask().boundingRect().width() > pw
     win.collapse(force=True)
     pump(app)
-    assert win.progress == 0.0 and win.geometry() == strip
+    assert win.progress == 0.0 and win.geometry() == full
+    assert win.mask().boundingRect() == strip_mask and not win.panel.isVisible()
 
 
 def test_pin_keeps_open(app, win):
