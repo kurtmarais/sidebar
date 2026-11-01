@@ -65,6 +65,31 @@ def _install_error_log(path: Path) -> None:
     sys.excepthook = hook
 
 
+def _log_launch(path: Path, at_startup: bool) -> None:
+    """One line per launch: shows whether Windows started the app at sign-in,
+    which Python ran it, and whether Windows is redirecting its storage."""
+    import time
+    try:
+        uptime = ""
+        if sys.platform == "win32":
+            import ctypes
+            ctypes.windll.kernel32.GetTickCount64.restype = ctypes.c_ulonglong
+            uptime = f" pc_up={ctypes.windll.kernel32.GetTickCount64() // 1000}s"
+        registry = winplatform._registry_value() if winplatform.IS_WINDOWS else None
+        line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')} v{__version__} "
+                f"{'AT-STARTUP' if at_startup else 'manual'}{uptime} exe={sys.executable} "
+                f"package={winplatform.package_identity() or 'none'} data={path.parent} "
+                f"run_entry={registry!r} startup_shortcut={winplatform.startup_shortcut().exists()} "
+                f"disabled_in_task_manager={winplatform.startup_disabled_in_task_manager()}\n")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size > 100_000:
+            path.write_text("", encoding="utf-8")
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass
+
+
 def build_tray(app: QApplication, win: SidebarWindow) -> QSystemTrayIcon | None:
     if not QSystemTrayIcon.isSystemTrayAvailable():
         return None
@@ -90,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sidebar", description="Edge-docked sticky-notes sidebar")
     parser.add_argument("--data-dir", type=Path, help="folder for the notes database and backups")
     parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--startup", action="store_true", help="started by Windows at sign-in")
     args, qt_args = parser.parse_known_args(argv if argv is not None else sys.argv[1:])
 
     QGuiApplication.setAttribute(Qt.AA_ShareOpenGLContexts)   # required by Qt WebEngine
@@ -114,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         pass
     data_dir = args.data_dir or default_data_dir()
     _install_error_log(data_dir / "error.log")
+    _log_launch(data_dir / "launch.log", args.startup)
     db = Database(data_dir / "sidebar.db")
     try:
         backup.auto_backup(db, data_dir / "backups")

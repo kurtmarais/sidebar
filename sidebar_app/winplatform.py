@@ -69,11 +69,11 @@ if IS_WINDOWS:
 def startup_parts() -> tuple[str, str, str]:
     """(program, arguments, working folder) that start this copy of the app."""
     if getattr(sys, "frozen", False):
-        return sys.executable, "", str(Path(sys.executable).parent)
+        return sys.executable, "--startup", str(Path(sys.executable).parent)
     exe = Path(sys.executable)
     pythonw = exe.with_name("pythonw.exe")
     root = Path(__file__).resolve().parent.parent
-    return str(pythonw if pythonw.exists() else exe), f'"{root / "run_sidebar.py"}"', str(root)
+    return str(pythonw if pythonw.exists() else exe), f'"{root / "run_sidebar.py"}" --startup', str(root)
 
 
 def startup_command() -> str:
@@ -95,10 +95,41 @@ def _registry_value() -> str | None:
         return None
 
 
+APPROVED_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved"
+
+
+def startup_disabled_in_task_manager() -> bool:
+    """Task Manager's Startup apps switch is stored separately; first byte 0x03 = disabled."""
+    if not IS_WINDOWS:
+        return False
+    import winreg
+    for sub_key, name in (("Run", APP_NAME), ("StartupFolder", f"{APP_NAME}.lnk")):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{APPROVED_KEY}\\{sub_key}") as key:
+                data = winreg.QueryValueEx(key, name)[0]
+        except OSError:
+            continue
+        if isinstance(data, (bytes, bytearray)) and data[:1] in (b"\x01", b"\x03"):
+            return True
+    return False
+
+
+def _clear_task_manager_disable() -> None:
+    import winreg
+    for sub_key, name in (("Run", APP_NAME), ("StartupFolder", f"{APP_NAME}.lnk")):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{APPROVED_KEY}\\{sub_key}", 0,
+                                winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, name)       # no value = enabled
+        except OSError:
+            pass
+
+
 def is_startup_enabled() -> bool:
     if not IS_WINDOWS:
         return False
-    return _registry_value() is not None or startup_shortcut().exists()
+    present = _registry_value() is not None or startup_shortcut().exists()
+    return present and not startup_disabled_in_task_manager()
 
 
 def _create_shortcut(lnk: Path) -> None:
@@ -139,6 +170,7 @@ def set_startup_enabled(enabled: bool) -> str:
         return "off"
 
     command = startup_command()
+    _clear_task_manager_disable()      # ticking the box means "on", even if switched off in Task Manager
     registry_error = ""
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
@@ -169,6 +201,24 @@ def refresh_startup_entry() -> bool:
         return False
     set_startup_enabled(True)
     return True
+
+
+def package_identity() -> str:
+    """Name of the Windows app package this process runs inside, or "".
+
+    Python started through some Microsoft Store / install-manager aliases runs
+    inside an app package, where Windows may redirect registry and AppData
+    writes to a private copy. That matters for Start with Windows."""
+    if not IS_WINDOWS:
+        return ""
+    length = wintypes.UINT(0)
+    rc = _kernel32.GetCurrentPackageFullName(ctypes.byref(length), None)
+    if rc == 15700:              # APPMODEL_ERROR_NO_PACKAGE
+        return ""
+    buf = ctypes.create_unicode_buffer(length.value + 1)
+    if _kernel32.GetCurrentPackageFullName(ctypes.byref(length), buf) != 0:
+        return "unknown package"
+    return buf.value
 
 
 # ---------------------------------------------------------------- hotkey

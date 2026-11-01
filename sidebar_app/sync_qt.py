@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from datetime import datetime
 from typing import Callable
 
@@ -29,7 +30,6 @@ class SyncController(QObject):
         super().__init__(parent)
         self.db = db
         self.access: dict = {}
-        self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sync")
         self.future: Future | None = None
         self.again = False
         self.timer = QTimer(self)
@@ -40,6 +40,21 @@ class SyncController(QObject):
         self.poll = QTimer(self)
         self.poll.timeout.connect(self._check)
         self.last_error = ""
+
+    @staticmethod
+    def _submit(fn, *args) -> Future:
+        """Run on a daemon thread, so a slow network can never keep the app
+        alive after it has been closed."""
+        fut: Future = Future()
+
+        def work() -> None:
+            try:
+                fut.set_result(fn(*args))
+            except BaseException as exc:      # delivered to the main thread via the future
+                fut.set_exception(exc)
+
+        threading.Thread(target=work, name="sync", daemon=True).start()
+        return fut
 
     def enabled(self) -> bool:
         return sync.is_configured(self.db.settings())
@@ -60,7 +75,7 @@ class SyncController(QObject):
             self.again = True
             return
         payload = sync.prepare(self.db, self.db.settings(), self.access)
-        self.future = self.pool.submit(sync.transfer, payload)
+        self.future = self._submit(sync.transfer, payload)
         self.poll.start(150)
 
     def _check(self) -> None:
@@ -95,17 +110,17 @@ class SyncController(QObject):
         self.timer.stop()
         self.debounce.stop()
         self.poll.stop()
-        if self.enabled():
-            try:
-                if self.future is not None:
-                    self.future.result(timeout=8)
-                    self.future = None
-                res = self.pool.submit(sync.transfer, sync.prepare(self.db, self.db.settings(), self.access)
-                                       ).result(timeout=8)
-                sync.apply(self.db, res)
-            except Exception:
-                pass
-        self.pool.shutdown(wait=False, cancel_futures=True)
+        if not self.enabled():
+            return
+        try:
+            if self.future is not None:
+                self.future.result(timeout=6)       # let a running cycle finish (its result is
+                self.future = None                  # superseded by the final one below)
+            res = self._submit(sync.transfer, sync.prepare(self.db, self.db.settings(), self.access)
+                               ).result(timeout=6)
+            sync.apply(self.db, res)
+        except Exception:
+            pass        # offline: the edits stay marked and upload on the next start
 
 
 class SyncDialog(QDialog):

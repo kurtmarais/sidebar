@@ -1004,9 +1004,9 @@ class SidebarWindow(QWidget):
             region = region.united(QRegion(self._panel_area()))
         return region
 
-    def _apply_mask(self) -> None:
+    def _apply_mask(self, force: bool = False) -> None:
         region = self._active_region()
-        if region != self.mask():
+        if force or region != self.mask():
             self.setMask(region)
 
     def _cursor_inside(self) -> bool:
@@ -1078,6 +1078,7 @@ class SidebarWindow(QWidget):
         if self.geometry() != rect:
             self.setGeometry(rect)
         self._set_progress(self._target)
+        self._apply_mask(force=True)      # the native window may have been recreated
 
     def expand(self, activate: bool = False) -> None:
         self.open_timer.stop()
@@ -1343,6 +1344,10 @@ class SidebarWindow(QWidget):
         self.strip.update()
 
     def _apply_flags(self) -> None:
+        # Changing flags recreates the native window: release the hotkey from the
+        # old one first, or registering it on the new window fails.
+        if getattr(self, "_hotkey_hwnd", None) is not None:
+            winplatform.unregister_hotkey(self._hotkey_hwnd)
         flags = Qt.FramelessWindowHint | Qt.Tool | Qt.NoDropShadowWindowHint
         if self.s["always_on_top"]:
             flags |= Qt.WindowStaysOnTopHint
