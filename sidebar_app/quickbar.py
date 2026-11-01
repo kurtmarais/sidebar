@@ -216,8 +216,10 @@ class FocusSoundTile(Tile):
             QWebEngineView, QWebEnginePage, QWebEngineProfile, QWebEngineSettings = engine
             self.view = QWebEngineView()
             # Off-the-record profile: YouTube cookies and history are never written to disk.
-            self._profile = QWebEngineProfile(self.view)
-            self.view.setPage(QWebEnginePage(self._profile, self.view))
+            # The profile must outlive its page, so it belongs to the tile, not the view.
+            self._profile = QWebEngineProfile(self)
+            self._page = QWebEnginePage(self._profile, self._profile)
+            self.view.setPage(self._page)
             self.view.setAttribute(Qt.WA_DontShowOnScreen, True)
             self.view.resize(320, 180)
             s = self.view.settings()
@@ -266,10 +268,17 @@ class FocusSoundTile(Tile):
         self._render()
 
     def shutdown(self) -> None:
-        if self.view is not None:
-            self.view.setHtml("<html></html>")
-            self.view.deleteLater()
-            self.view = None
+        """Free view, then page, then profile, immediately and in that order: the
+        app may be quitting, when delayed deletes never run, and Qt warns (and can
+        crash on exit) if a profile goes before its page."""
+        from shiboken6 import Shiboken
+        for name in ("view", "_page", "_profile"):
+            obj = getattr(self, name, None)
+            if obj is not None and Shiboken.isValid(obj):
+                if name == "view":
+                    obj.setHtml("<html></html>")
+                Shiboken.delete(obj)
+            setattr(self, name, None)
 
 
 class LaunchAppTile(Tile):
