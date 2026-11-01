@@ -13,7 +13,7 @@ from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import __version__, backup, updater
+from . import __version__, backup, updater, winplatform
 from .paths import default_data_dir
 from .storage import Database
 from .theme import app_icon
@@ -88,6 +88,10 @@ def main(argv: list[str] | None = None) -> int:
     server.listen(SERVER_NAME)
 
     app.setFont(_pick_font())
+    try:
+        winplatform.refresh_startup_entry()   # keep "Start with Windows" pointing at this copy
+    except OSError:
+        pass
     data_dir = args.data_dir or default_data_dir()
     db = Database(data_dir / "sidebar.db")
     try:

@@ -83,6 +83,23 @@ def is_startup_enabled() -> bool:
         return False
 
 
+def refresh_startup_entry() -> bool:
+    """If Start with Windows is on but points somewhere else (an old folder or
+    exe), point it at the copy that is running now. Returns True if fixed."""
+    if not IS_WINDOWS:
+        return False
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            current, _ = winreg.QueryValueEx(key, APP_NAME)
+    except OSError:
+        return False
+    if current == startup_command():
+        return False
+    set_startup_enabled(True)
+    return True
+
+
 def set_startup_enabled(enabled: bool) -> None:
     if not IS_WINDOWS:
         return
