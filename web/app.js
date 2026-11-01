@@ -440,10 +440,13 @@ function openEditor(cardUid) {
 function showLoginError(msg) { const el = $("#login-error"); if (el) el.textContent = msg; }
 
 function setupScreen() {
-  const url = h("input", { placeholder: "https://xxxx.supabase.co", inputmode: "url", value: S.url });
-  const key = h("input", { placeholder: "Publishable (anon) key", value: S.key });
+  // Only ask for what config.js doesn't already provide.
+  const url = h("input", { placeholder: "https://xxxx.supabase.co", inputmode: "url", value: config().url,
+    class: SUPABASE_URL ? "hidden" : null });
+  const key = h("input", { placeholder: "Publishable (anon) key", value: config().key,
+    class: SUPABASE_KEY ? "hidden" : null });
   return h("main", { class: "login" }, h("h1", {}, "Sidebar"),
-    h("p", { class: "muted" }, "Connect to your Supabase project. Find these under Project Settings → API (or Data API) in Supabase."),
+    h("p", { class: "muted" }, "Connect to your Supabase project. Find these under Project Settings → API Keys / Data API in Supabase. You only need to do this once."),
     url, key,
     h("button", { class: "primary", onclick: () => {
       if (!/^https:\/\//.test(url.value.trim()) || !key.value.trim()) return alert("Enter the https:// project URL and the publishable key.");
@@ -507,6 +510,8 @@ function render() {
 // ------------------------------------------------------------------ start
 render();
 if (S.session) syncNow();
+// Ask the browser to keep this app's storage (sign-in and notes) instead of clearing it under storage pressure.
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 setInterval(() => { if (document.visibilityState === "visible" && !editing) syncNow(); }, 20000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") syncNow(); });
 window.addEventListener("online", () => syncNow());

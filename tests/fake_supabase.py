@@ -37,6 +37,7 @@ class FakeSupabase:
         self.refresh: dict[str, str] = {}     # refresh token -> user id
         self.key = "sb_publishable_test"
         self.static_dir = static_dir
+        self.config_js: str | None = 'export const SUPABASE_URL = "";\nexport const SUPABASE_KEY = "";\n'
         self.lock = threading.Lock()
         self.requests: list[str] = []
         self._tick = 0
@@ -91,6 +92,8 @@ class FakeSupabase:
                     return self._send(200, rows)
                 if server.static_dir is not None:
                     rel = url.path.lstrip("/") or "index.html"
+                    if rel == "config.js" and server.config_js is not None:
+                        return self._send(200, server.config_js.encode(), "text/javascript")
                     f = (server.static_dir / rel).resolve()
                     if f.is_file() and server.static_dir.resolve() in f.parents:
                         ctype = mimetypes.guess_type(str(f))[0] or "application/octet-stream"
