@@ -39,6 +39,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "follow_window": True,        # notes that follow the window in front
     "suggest_meeting_notes": True,
     "focus_minutes": 25,
+    "auto_update": True,          # git installs: pull the latest version when closed
     "show_quickbar": True,        # focus-sound and app-launcher tiles
     "focus_sound_url": "https://www.youtube.com/watch?v=co7KgV2edvI",
     "focus_sound_name": "Airplane cabin",

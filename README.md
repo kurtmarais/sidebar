@@ -103,6 +103,8 @@ Use Git once to set up the folder. After that, a single command fetches each new
 
 Your notes live in `%APPDATA%\Sidebar`, not in this folder, so updating or deleting the folder never touches them.
 
+**Automatic updates.** In a git install, closing the sidebar (tray icon → Quit, or shutting down Windows) starts a background `git pull`, and the next launch runs the new version. Dependencies are reinstalled only when `requirements.txt` changes. **Update and restart** in the tray or gear menu does the same and then reopens the sidebar. Updates that would overwrite your own local edits are skipped. Each run is logged in `%APPDATA%\Sidebar\update.log` (gear menu → View update log). This can be turned off in Settings. The standalone `.exe` does not self-update.
+
 ## Build a standalone .exe
 
 ```powershell
@@ -132,6 +134,7 @@ sidebar_app/
   backup.py        snapshots, JSON backup and restore, Markdown export
   secrets_store.py PIN-protected encryption for secret notes
   quickbar.py      focus-sound and app-launcher tiles
+  updater.py       git pull on close / "Update and restart"
   winplatform.py   Windows APIs: startup entry, hotkey, front window, DPAPI, meeting detection
   dialogs.py       settings and date pickers
   theme.py         colours, stylesheet, drawn icons

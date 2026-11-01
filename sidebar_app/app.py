@@ -13,7 +13,7 @@ from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import __version__, backup
+from . import __version__, backup, updater
 from .paths import default_data_dir
 from .storage import Database
 from .theme import app_icon
@@ -54,6 +54,8 @@ def build_tray(app: QApplication, win: SidebarWindow) -> QSystemTrayIcon | None:
     menu.addAction("Open sidebar", lambda: win.expand(activate=True))
     menu.addAction("New note", lambda: win.new_card("note"))
     menu.addAction("Settings…", win.open_settings)
+    if updater.repo_root() is not None:
+        menu.addAction("Update and restart", win.update_and_restart)
     menu.addSeparator()
     menu.addAction("Quit", app.quit)
     tray.setContextMenu(menu)
@@ -105,7 +107,11 @@ def main(argv: list[str] | None = None) -> int:
 
     def on_quit() -> None:
         win.shutdown()
+        restart = win.restart_after_update
+        auto = bool(win.s.get("auto_update", True))
         db.close()
+        if restart or auto:
+            updater.spawn_update(data_dir / "update.log", restart=restart)
 
     app.aboutToQuit.connect(on_quit)
     win.show()

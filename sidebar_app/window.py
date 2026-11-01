@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 
-from . import backup, dialogs, winplatform
+from . import backup, dialogs, updater, winplatform
 from .cardlist import VIEW_ARCHIVE, VIEW_CARDS, VIEW_TODAY, BoardTabBar, CardList, today_section
 from .quickbar import QuickBar
 from .cards import (
@@ -158,6 +158,7 @@ class SidebarWindow(QWidget):
         self._offered_meetings: set[str] = set()
         self._focus_end: float | None = None
         self.tray = None
+        self.restart_after_update = False
 
         self.setWindowTitle("Sidebar")
         self.setWindowIcon(app_icon())
@@ -1061,8 +1062,18 @@ class SidebarWindow(QWidget):
         m.addAction("Export as Markdown…", self.export_markdown)
         m.addAction("Open data folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.data_dir))))
         m.addSeparator()
+        if updater.repo_root() is not None:
+            m.addAction("Update and restart", self.update_and_restart)
+            log = self.data_dir / "update.log"
+            if log.exists():
+                m.addAction("View update log", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(log))))
         m.addAction("Hide sidebar", lambda: self.collapse(force=True))
         m.addAction("Quit Sidebar", QApplication.quit)
+
+    def update_and_restart(self) -> None:
+        """Close, pull the latest version from git, and start again."""
+        self.restart_after_update = True
+        QApplication.quit()
 
     def open_settings(self) -> None:
         self.expand(activate=True)

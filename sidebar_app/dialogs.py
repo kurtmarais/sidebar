@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QTimeEdit, QVBoxLayout, QWidget,
 )
 
-from . import winplatform
+from . import updater, winplatform
 
 
 def _buttons(dialog: QDialog, ok_text: str = "OK") -> QDialogButtonBox:
@@ -192,6 +192,15 @@ class SettingsDialog(QDialog):
         self.startup.setEnabled(winplatform.IS_WINDOWS)
         form.addRow("", self.startup)
 
+        self.auto_update = QCheckBox("Update automatically when the sidebar closes")
+        git_install = updater.repo_root() is not None
+        self.auto_update.setChecked(bool(settings["auto_update"]) and git_install)
+        self.auto_update.setEnabled(git_install)
+        self.auto_update.setToolTip("Runs git pull in the install folder after closing; the next launch uses "
+                                    "the new version." if git_install else
+                                    "Only available when the app was installed with git clone.")
+        form.addRow("", self.auto_update)
+
         lay.addLayout(form)
         path = QLabel(f"Notes are stored only on this PC, in:\n{data_dir}")
         path.setProperty("muted", True)
@@ -209,6 +218,7 @@ class SettingsDialog(QDialog):
     def values(self) -> dict:
         return {
             "show_quickbar": self.quickbar.isChecked(),
+            "auto_update": self.auto_update.isChecked() if self.auto_update.isEnabled() else True,
             "focus_sound_url": self.sound_url.text().strip() or "https://www.youtube.com/watch?v=co7KgV2edvI",
             "focus_sound_name": self.sound_name.text().strip() or "Focus sound",
             "launch_app_path": self.app_path.text().strip(),
