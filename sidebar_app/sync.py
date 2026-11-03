@@ -33,7 +33,10 @@ PAGE = 1000
 TIMEOUT = 20
 CARD_FIELDS = ("uid", "board_uid", "type", "title", "color", "content", "position", "collapsed",
                "priority", "due_date", "remind_at", "archived", "archived_at", "link_app",
-               "link_title", "created_at", "updated_at", "starred")
+               "link_title", "created_at", "updated_at", "starred", "due_time")
+# Columns added after the first release. If the matching SQL update hasn't been
+# run in Supabase yet, uploads leave them out instead of failing.
+OPTIONAL_COLUMNS = ("starred", "due_time")
 
 
 class SyncError(Exception):
@@ -171,7 +174,8 @@ class Result:
     card_cursor: str = ""
     pushed: tuple[list, list, list] = ([], [], [])
     rekeyed: dict[str, str] = field(default_factory=dict)     # local board uid -> cloud uid
-    needs_star_update: bool = False   # Supabase lacks the starred column (SQL update not run yet)
+    needs_star_update: bool = False   # Supabase lacks a newer column (SQL update not run yet)
+    missing_columns: set[str] = field(default_factory=set)
 
 
 def is_configured(settings: dict) -> bool:
@@ -239,14 +243,20 @@ def transfer(p: Payload, opener: Opener | None = None) -> Result:
                         ("cards", card_tombs), ("boards", board_tombs)):
         if not rows:
             continue
-        try:
-            client.upsert(table, rows, token)
-        except SyncError as exc:
-            # Supabase not yet updated with the "starred" column: sync everything else.
-            if "starred" not in str(exc) or not any("starred" in r for r in rows):
-                raise
-            client.upsert(table, [{k: v for k, v in r.items() if k != "starred"} for r in rows], token)
+        missing: set[str] = set()
+        while True:
+            try:
+                client.upsert(table, [{k: v for k, v in r.items() if k not in missing} for r in rows], token)
+                break
+            except SyncError as exc:
+                col = next((c for c in OPTIONAL_COLUMNS if c in str(exc) and c not in missing
+                            and any(c in r for r in rows)), None)
+                if col is None:
+                    raise
+                missing.add(col)
+        if missing:
             res.needs_star_update = True
+            res.missing_columns |= missing
     res.pushed = (p.boards, p.cards, p.tombs)
     return res
 

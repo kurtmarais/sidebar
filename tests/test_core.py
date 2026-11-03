@@ -155,3 +155,36 @@ def test_pin_guard_lockout():
 ])
 def test_detect_meeting(exe, title, expected):
     assert detect_meeting(exe, title) == expected
+
+
+# ------------------------------------------------------------- due times
+def test_due_badge_with_and_without_time():
+    from datetime import datetime
+    from sidebar_app.cards import due_badge
+    now = datetime(2026, 11, 3, 13, 0)
+    d = now.date()
+    assert due_badge(d, now) == ("Today", "today")
+    assert due_badge(d, now, "14:30") == ("Today 14:30", "today")
+    assert due_badge(d, now, "09:00") == ("Overdue 09:00", "overdue")      # time passed: overdue already
+    assert due_badge(date(2026, 11, 4), now, "08:15") == ("Tomorrow 08:15", "tomorrow")
+    assert due_badge(date(2026, 11, 2), now, "18:00") == ("Overdue", "overdue")
+    assert due_badge(date(2026, 11, 9), now, "10:00")[0] == "Due Mon 9 Nov 10:00"
+
+
+def test_due_at_and_today_view(db):
+    from datetime import datetime
+    from sidebar_app.cardlist import today_section
+    c = db.add_card(db.boards()[0].id, "checklist", title="Report")
+    db.update_card(c.id, due_date="2026-11-03", due_time="09:30")
+    card = db.card(c.id)
+    assert card.due_time == "09:30" and card.due_at() == datetime(2026, 11, 3, 9, 30)
+
+    class W:
+        pass
+    w = W()
+    w.card = card
+    assert today_section(w, date(2026, 11, 3), datetime(2026, 11, 3, 9, 0)) == "Today"
+    assert today_section(w, date(2026, 11, 3), datetime(2026, 11, 3, 10, 0)) == "Overdue"
+    db.update_card(c.id, due_time=None)
+    w.card = db.card(c.id)
+    assert today_section(w, date(2026, 11, 3), datetime(2026, 11, 3, 22, 0)) == "Today"   # no time: due all day

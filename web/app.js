@@ -17,7 +17,10 @@ const PRIORITY = { 0: "None", 1: "Low", 2: "Medium", 3: "High" };
 const PRIORITY_COLOR = { 1: "#4d8dff", 2: "#ff9f43", 3: "#ff6b6b" };
 const CARD_FIELDS = ["uid", "board_uid", "type", "title", "color", "content", "position", "collapsed",
   "priority", "due_date", "remind_at", "archived", "archived_at", "link_app", "link_title",
-  "created_at", "updated_at", "deleted", "starred"];
+  "created_at", "updated_at", "deleted", "starred", "due_time"];
+// Columns added after the first release: if their Supabase SQL update hasn't been
+// run yet, uploads leave them out instead of failing.
+const OPTIONAL_COLUMNS = ["starred", "due_time"];
 const BOARD_FIELDS = ["uid", "name", "position", "updated_at", "deleted"];
 
 // ------------------------------------------------------------------ state
@@ -157,16 +160,23 @@ async function syncNow() {
     for (const table of ["boards", "cards"]) {
       let rows = Object.values(S.queue[table]);
       if (!rows.length) continue;
-      if (S.noStarColumn) rows = rows.map(({ starred, ...r }) => r);
-      try {
-        await sb.upsert(table, rows, tok);
-      } catch (e) {
-        // Supabase not yet updated with the "starred" column: sync everything else.
-        if (!/starred/.test(e.message || "") || table !== "cards") throw e;
-        S.noStarColumn = true;
-        rows = rows.map(({ starred, ...r }) => r);
-        await sb.upsert(table, rows, tok);
+      S.missingColumns = S.missingColumns || [];
+      const strip = (list) => list.map((r) => Object.fromEntries(
+        Object.entries(r).filter(([k]) => !S.missingColumns.includes(k))));
+      rows = strip(rows);
+      for (;;) {
+        try {
+          await sb.upsert(table, rows, tok);
+          break;
+        } catch (e) {
+          const col = OPTIONAL_COLUMNS.find((k) => (e.message || "").includes(k)
+            && !S.missingColumns.includes(k) && rows.some((r) => k in r));
+          if (!col || table !== "cards") throw e;
+          S.missingColumns.push(col);
+          rows = strip(rows);
+        }
       }
+      S.noStarColumn = S.missingColumns.includes("starred");
       for (const r of rows) {
         if (S.queue[table][r.uid] && S.queue[table][r.uid].updated_at === r.updated_at) delete S.queue[table][r.uid];
       }
@@ -196,7 +206,8 @@ function setStatus(text) {
   const pending = Object.keys(S.queue.cards).length + Object.keys(S.queue.boards).length;
   const last = S.lastSync ? new Date(S.lastSync * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
   el.textContent = text || (pending ? `${pending} change${pending > 1 ? "s" : ""} waiting` : last ? `Synced ${last}` : "");
-  el.title = S.noStarColumn ? "Stars stay on this phone until the Supabase starred update is run" : "";
+  el.title = (S.missingColumns || []).length
+    ? `Not syncing yet (run the Supabase update): ${S.missingColumns.join(", ")}` : "";
 }
 
 // ------------------------------------------------------------- dates
@@ -205,13 +216,20 @@ const isoDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getD
 const todayIso = () => isoDate(new Date());
 const tomorrowIso = () => { const d = new Date(); d.setDate(d.getDate() + 1); return isoDate(d); };
 
+// The moment a card is due: its due time, or the end of the due day.
+function dueAt(c) {
+  if (!c.due_date) return null;
+  return new Date(`${c.due_date}T${c.due_time || "23:59:59"}`);
+}
+
 function dueBadge(c) {
   if (!c.due_date) return null;
-  if (c.due_date < todayIso()) return ["Overdue", "var(--danger)"];
-  if (c.due_date === todayIso()) return ["Today", "var(--accent)"];
-  if (c.due_date === tomorrowIso()) return ["Tomorrow", "var(--info)"];
+  const at = c.due_time ? ` ${c.due_time}` : "";
+  if (dueAt(c) < new Date()) return ["Overdue" + (c.due_date === todayIso() ? at : ""), "var(--danger)"];
+  if (c.due_date === todayIso()) return ["Today" + at, "var(--accent)"];
+  if (c.due_date === tomorrowIso()) return ["Tomorrow" + at, "var(--info)"];
   const d = new Date(c.due_date + "T12:00:00");
-  return ["Due " + d.toLocaleDateString([], { day: "numeric", month: "short" }), "var(--muted)"];
+  return ["Due " + d.toLocaleDateString([], { day: "numeric", month: "short" }) + at, "var(--muted)"];
 }
 
 function remindText(ts) {
@@ -226,7 +244,7 @@ function todaySection(c) {
   const t = todayIso(), tm = tomorrowIso();
   const rem = c.remind_at ? new Date(c.remind_at * 1000) : null;
   const remDay = rem ? isoDate(rem) : null;
-  if ((c.due_date && c.due_date < t) || (rem && rem < new Date())) return "Overdue";
+  if ((c.due_date && dueAt(c) < new Date()) || (rem && rem < new Date())) return "Overdue";
   if (c.due_date === t || remDay === t) return "Today";
   if (c.due_date === tm || remDay === tm) return "Tomorrow";
   return null;
@@ -652,6 +670,17 @@ function openEditor(cardUid) {
     onclick: () => { c.starred = !c.starred; starBtn.classList.toggle("on", c.starred); starBtn.textContent = c.starred ? "★" : "☆"; change(); } },
     c.starred ? "★" : "☆");
 
+  // Due date with an optional time; the time needs a date and is cleared with it.
+  const dueTime = h("input", { type: "time", value: c.due_time || "", disabled: !c.due_date,
+    onchange: (e) => { c.due_time = e.target.value || null; change(); } });
+  const dueDate = h("input", { type: "date", value: c.due_date || "",
+    onchange: (e) => {
+      c.due_date = e.target.value || null;
+      if (!c.due_date) { c.due_time = null; dueTime.value = ""; }
+      dueTime.disabled = !c.due_date;
+      change();
+    } });
+
   const sheet = h("div", { id: "editor", class: "sheet" },
     h("div", { class: "sheet-bar" },
       h("button", { class: "back", onclick: close }, "‹ Back"),
@@ -666,8 +695,8 @@ function openEditor(cardUid) {
         boards().map((b) => h("option", { value: b.uid, selected: b.uid === c.board_uid }, b.name)))),
       h("label", {}, "Priority", h("select", { onchange: (e) => { c.priority = Number(e.target.value); change(); } },
         [3, 2, 1, 0].map((p) => h("option", { value: p, selected: c.priority === p }, PRIORITY[p])))),
-      h("label", { class: "full" }, "Due date", h("input", { type: "date", value: c.due_date || "",
-        onchange: (e) => { c.due_date = e.target.value || null; change(); } })),
+      h("label", {}, "Due date", dueDate),
+      h("label", {}, "Due time", dueTime),
       h("label", { class: "full" }, "Reminder", h("input", { type: "datetime-local", value: toLocalInput(c.remind_at),
         onchange: (e) => { c.remind_at = e.target.value ? new Date(e.target.value).getTime() / 1000 : null; change(); } })),
       h("div", { class: "swatches" }, Object.entries(COLORS).map(([name, hex]) => h("button", {
@@ -763,7 +792,8 @@ function render() {
 }
 
 // ------------------------------------------------------------------ start
-S.noStarColumn = false;        // re-check each launch: the Supabase update may have been run since
+S.noStarColumn = false;        // re-check each launch: the Supabase updates may have been run since
+S.missingColumns = [];
 render();
 if (S.session) syncNow();
 // Ask the browser to keep this app's storage (sign-in and notes) instead of clearing it under storage pressure.

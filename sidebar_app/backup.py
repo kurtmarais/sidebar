@@ -77,7 +77,7 @@ def export_markdown(db: Database, path: Path) -> None:
             if c.priority:
                 meta.append(f"Priority: {PRIORITY_LABELS[c.priority]}")
             if c.due_date:
-                meta.append(f"Due: {c.due_date}")
+                meta.append(f"Due: {c.due_date}" + (f" {c.due_time}" if c.due_time else ""))
             lines += [f"*{' · '.join(m for m in meta if m)}*", ""]
             body = c.content or {}
             if c.type == "note":

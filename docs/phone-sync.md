@@ -75,6 +75,8 @@ Every push to that branch redeploys the app automatically.
 - Edits made offline are kept on the phone and upload when you're back online.
 - **Sign out** removes the notes stored on the phone (they stay in Supabase and on the PC).
 
+**Due times:** a card's due date can have an optional time (phone: the **Due time** field next to the date; PC: card menu → **Due date → Pick date and time…**). With a time, the card shows e.g. "Today 14:30" and turns overdue once that time passes; without one, it's due all day. This needs the database update in [`supabase/migrations/20261103090000_due_time.sql`](../supabase/migrations/20261103090000_due_time.sql) (run it in the SQL Editor once). Until then everything else syncs and times stay on the device where you set them.
+
 **Stars need one database update (once):** in Supabase, **SQL Editor**, run the contents of [`supabase/migrations/20261102090000_starred.sql`](../supabase/migrations/20261102090000_starred.sql). Until then everything else syncs normally and stars just stay on the device where you set them.
 
 ## Privacy summary

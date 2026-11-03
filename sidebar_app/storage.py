@@ -11,11 +11,11 @@ import sqlite3
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Card types that sync to the phone (Supabase). Images, files and secrets stay on the PC.
 SYNC_TYPES = ("note", "checklist", "code", "links")
@@ -79,6 +79,7 @@ class Card:
     link_app: str = ""              # process name, e.g. "excel.exe"
     link_title: str = ""            # window title must contain this
     starred: bool = False
+    due_time: str | None = None     # optional "HH:MM" on the due date
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -102,6 +103,19 @@ class Card:
             parts.append(c.get("path", ""))
         return "\n".join(parts).lower()
 
+    def due_at(self) -> datetime | None:
+        """The moment the card is due: the due time, or the end of the due day."""
+        d = self.due()
+        if d is None:
+            return None
+        if self.due_time:
+            try:
+                h, m = (int(x) for x in self.due_time.split(":"))
+                return datetime(d.year, d.month, d.day, h, m)
+            except ValueError:
+                pass
+        return datetime(d.year, d.month, d.day, 23, 59, 59)
+
     def due(self) -> date | None:
         if not self.due_date:
             return None
@@ -124,7 +138,7 @@ class Card:
 _COLUMNS = (
     "id", "uid", "board_id", "type", "title", "color", "content", "position",
     "collapsed", "priority", "due_date", "remind_at", "archived", "archived_at",
-    "link_app", "link_title", "created_at", "updated_at", "starred",
+    "link_app", "link_title", "created_at", "updated_at", "starred", "due_time",
 )
 
 
@@ -141,7 +155,7 @@ def _card_from_row(row: sqlite3.Row) -> Card:
         remind_at=row["remind_at"], archived=bool(row["archived"]),
         archived_at=row["archived_at"], link_app=row["link_app"] or "",
         link_title=row["link_title"] or "", created_at=row["created_at"],
-        updated_at=row["updated_at"], starred=bool(row["starred"]),
+        updated_at=row["updated_at"], starred=bool(row["starred"]), due_time=row["due_time"],
     )
 
 
@@ -231,6 +245,11 @@ class Database:
         if version < 3:
             with self.conn:
                 self.conn.execute("ALTER TABLE cards ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+                self.conn.execute("PRAGMA user_version = 3")
+            version = 3
+        if version < 4:
+            with self.conn:
+                self.conn.execute("ALTER TABLE cards ADD COLUMN due_time TEXT")
                 self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def _seed(self) -> None:
@@ -338,7 +357,7 @@ class Database:
                  content: dict | None = None, **extra: Any) -> Card:
         if type not in CARD_TYPES:
             raise ValueError(f"Unknown card type: {type}")
-        unknown = set(extra) - {"link_app", "link_title", "due_date", "remind_at", "priority"}
+        unknown = set(extra) - {"link_app", "link_title", "due_date", "due_time", "remind_at", "priority"}
         if unknown:
             raise ValueError(f"Unknown fields: {sorted(unknown)}")
         now = time.time()
@@ -357,6 +376,7 @@ class Database:
     _UPDATABLE = {
         "board_id", "type", "title", "color", "content", "collapsed", "priority",
         "due_date", "remind_at", "archived", "archived_at", "link_app", "link_title", "starred",
+        "due_time",
     }
 
     def update_card(self, card_id: int, **fields: Any) -> None:
@@ -495,20 +515,22 @@ class Database:
             json.dumps(r.get("content") or {}), r.get("position", 0), int(bool(r.get("collapsed"))),
             int(r.get("priority") or 0), r.get("due_date"), r.get("remind_at"), int(bool(r.get("archived"))),
             r.get("archived_at"), r.get("link_app") or "", r.get("link_title") or "", r["updated_at"],
-            int(bool(r.get("starred"))),
+            int(bool(r.get("starred"))), r.get("due_time"),
         )
         with self.conn:
             if local is None:
                 cur = self.conn.execute(
                     "INSERT INTO cards(board_id, type, title, color, content, position, collapsed, priority, "
                     "due_date, remind_at, archived, archived_at, link_app, link_title, updated_at, starred, "
-                    "uid, created_at, dirty, pushed) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)",
+                    "due_time, uid, created_at, dirty, pushed) "
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)",
                     (*values, r["uid"], r.get("created_at") or r["updated_at"]))
                 return cur.lastrowid
             self.conn.execute(
                 "UPDATE cards SET board_id = ?, type = ?, title = ?, color = ?, content = ?, position = ?, "
                 "collapsed = ?, priority = ?, due_date = ?, remind_at = ?, archived = ?, archived_at = ?, "
-                "link_app = ?, link_title = ?, updated_at = ?, starred = ?, dirty = 0, pushed = 1 WHERE id = ?",
+                "link_app = ?, link_title = ?, updated_at = ?, starred = ?, due_time = ?, dirty = 0, pushed = 1 "
+                "WHERE id = ?",
                 (*values, local["id"]))
             return local["id"]
 
@@ -563,8 +585,8 @@ class Database:
                 self.conn.execute(
                     "INSERT INTO cards(uid, board_id, type, title, color, content, position, "
                     "collapsed, priority, due_date, remind_at, archived, archived_at, "
-                    "link_app, link_title, created_at, updated_at, starred) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "link_app, link_title, created_at, updated_at, starred, due_time) "
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         uid, board_id, c["type"], c.get("title", ""), c.get("color", "yellow"),
                         json.dumps(c.get("content") or {}), c.get("position", 0),
@@ -572,6 +594,7 @@ class Database:
                         c.get("due_date"), c.get("remind_at"), int(bool(c.get("archived"))),
                         c.get("archived_at"), c.get("link_app", ""), c.get("link_title", ""),
                         c.get("created_at", now), c.get("updated_at", now), int(bool(c.get("starred"))),
+                        c.get("due_time"),
                     ),
                 )
                 existing.add(uid)

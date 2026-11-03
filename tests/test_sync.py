@@ -217,3 +217,23 @@ def test_window_shows_phone_edits_but_not_mid_typing(tmp_path, server):
     assert phone.card(p_typing.id).title == "still typing"
     win.syncer.shutdown()
     win.close()
+
+
+def test_due_time_syncs(tmp_path, server):
+    pc, phone = device(tmp_path, "pc", server), device(tmp_path, "phone", server)
+    c = pc.add_card(pc.boards()[0].id, "checklist", title="Submit")
+    pc.update_card(c.id, due_date="2026-11-05", due_time="16:45")
+    sync.sync_now(pc)
+    sync.sync_now(phone)
+    assert card_by_title(phone, "Submit").due_time == "16:45"
+
+
+def test_missing_due_time_column_does_not_block_sync(tmp_path, server):
+    server.missing_columns = {"due_time"}
+    pc = device(tmp_path, "pc", server)
+    c = pc.add_card(pc.boards()[0].id, "note", title="Still syncs")
+    pc.update_card(c.id, due_date="2026-11-05", due_time="16:45")
+    sync.sync_now(pc)
+    row = next(r for r in server.tables["cards"].values() if r["title"] == "Still syncs")
+    assert row["due_date"] == "2026-11-05" and row["due_time"] is None
+    assert not pc.dirty_cards()

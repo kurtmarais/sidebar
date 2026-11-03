@@ -140,7 +140,8 @@ body.sheet-open { overflow: hidden; }
 .meta label.full { grid-column: 1 / -1; }
 .meta label > * { color: var(--text); width: 100%; min-width: 0; box-sizing: border-box; }
 /* iOS gives date inputs a fixed intrinsic width that overflows grid cells: let them size to the cell */
-.meta input[type=date], .meta input[type=datetime-local] { -webkit-appearance: none; appearance: none;
+.meta input[type=time]:disabled { opacity: .45; }
+.meta input[type=date], .meta input[type=datetime-local], .meta input[type=time] { -webkit-appearance: none; appearance: none;
   min-height: 42px; text-align: left; display: block; }
 .swatches { grid-column: 1 / -1; display: flex; gap: 10px; flex-wrap: wrap; }
 .swatch { width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent; }

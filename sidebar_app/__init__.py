@@ -1,3 +1,3 @@
 """Sidebar: an edge-docked sticky-notes sidebar for Windows."""
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"

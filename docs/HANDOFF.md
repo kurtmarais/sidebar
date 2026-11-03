@@ -17,7 +17,7 @@ sidebar_app/
   window.py            edge strip, slide animation, panel, views, reminders, window-follow, sync hookup
   cards.py             card widgets/types (CARD_KINDS), badges, menus, secret cards
   cardlist.py          card list, sections, drag-reorder, category tabs
-  storage.py           SQLite schema v3 (dirty flags, tombstones, starred), sync merge helpers
+  storage.py           SQLite schema v4 (dirty flags, tombstones, starred, due_time), sync merge helpers
   sync.py              Supabase REST sync engine (urllib, no deps); newest edit wins per card
   sync_qt.py           background sync controller (daemon thread) + "Phone sync…" dialog
   quickbar.py          tiles: focus sound (YouTube in off-the-record Qt WebEngine, loaded lazily), app launcher (caffeine64.exe)
@@ -25,7 +25,7 @@ sidebar_app/
   winplatform.py       Windows: startup (Run key + Startup-folder shortcut), hotkey, DPAPI, foreground window, meeting detection
   secrets_store.py     PIN/passphrase-locked notes (PBKDF2 + DPAPI)
   dialogs.py, theme.py, backup.py, paths.py
-supabase/migrations/   20261101120000_sidebar_sync.sql (tables, RLS, newest-wins trigger), 20261102090000_starred.sql
+supabase/migrations/   20261101120000_sidebar_sync.sql (tables, RLS, newest-wins trigger), 20261102090000_starred.sql, 20261103090000_due_time.sql
 web/                   phone app: index.html, app.js, supabase.js, styles.css, sw.js, config.js (URL + publishable key), _headers (CSP)
 wrangler.jsonc         Cloudflare Workers static-assets config (serves web/)
 docs/phone-sync.md     user-facing setup guide
@@ -42,7 +42,7 @@ tests/                 pytest (offscreen Qt), fake_supabase.py, Playwright (Node
 
 ## Key behaviours and decisions
 
-- **Sync:** newest edit wins per card. A database trigger ignores older uploads; tombstones are kept for deletes. Same-named default categories merge across devices. Cards being typed in are not replaced mid-edit. The phone queues offline edits. Both clients drop the `starred` field if that column doesn't exist yet.
+- **Sync:** newest edit wins per card. A database trigger ignores older uploads; tombstones are kept for deletes. Same-named default categories merge across devices. Cards being typed in are not replaced mid-edit. The phone queues offline edits. Both clients leave out newer optional columns (`starred`, `due_time`) if their SQL update hasn't been run yet.
 - **Phone gestures:** a full **left** swipe archives (restores in Archive); a full **right** swipe stars/unstars; partial swipes spring back. Hold then drag reorders (Notes view, no search). Notes can only be deleted from inside the note. In the editor, Back is top left, Done top right, and Delete note at the bottom. Empty new notes are dropped.
 - **Haptics:** the user said to ignore them. An inert iOS "hidden switch" haptic helper is still in `web/app.js`; leave it or remove it.
 - **Security hardening done:** links only open http/https/mailto; asset paths are confined to the assets folder; secret notes take passphrases (600k PBKDF2); focus sound uses an off-the-record web profile; the phone app has a strict CSP and renders with no `innerHTML`.

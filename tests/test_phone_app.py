@@ -109,6 +109,8 @@ def test_phone_gestures_and_editor(tmp_path, no_star_column):
         assert out["afterScroll"] == out["reorder"]["after"]     # vertical move changed nothing
         assert out["backLeft"] and out["doneRight"] and out["markDoneGone"] and out["deleteAtBottom"]
         assert not out["datesOverlap"] and out["datesFit"]
+        assert out["timeDisabledFirst"] and not out["dateTimeOverlap"] and out["dateTimeFit"]
+        assert "Tomorrow 08:15" in out["gammaBadge"]
         assert out["emptyDropped"] and out["newKept"] and out["deleted"]
         assert out["queueLeft"] == 0 and out["noStarColumn"] is no_star_column
 
@@ -118,3 +120,4 @@ def test_phone_gestures_and_editor(tmp_path, no_star_column):
         titles = [c.title for c in pc.cards() if not c.archived]
         assert titles == ["Delta", "Beta", "Gamma"]               # order from the phone
         assert by_title(pc, "Packing") is None
+        assert by_title(pc, "Gamma").due_time == "08:15"        # due time set on the phone

@@ -23,8 +23,9 @@ def today_section(w: CardWidget, today: date, now: datetime) -> str | None:
     """Which Today-panel section a card belongs in, if any."""
     c = w.card
     due = c.due()
+    due_at = c.due_at()
     rem = datetime.fromtimestamp(c.remind_at) if c.remind_at else None
-    if (due and due < today) or (rem and rem < now):
+    if (due_at and due_at < now) or (rem and rem < now):
         return "Overdue"
     if (due and due == today) or (rem and rem.date() == today):
         return "Today"

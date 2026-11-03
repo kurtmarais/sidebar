@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QDate, QDateTime, QMimeData, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QDate, QDateTime, QMimeData, QPoint, QRectF, QSize, Qt, QTime, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor, QDesktopServices, QDrag, QFont, QKeyEvent, QPainter, QPen,
     QPainterPath, QPixmap, QSyntaxHighlighter, QTextCharFormat,
@@ -1016,18 +1016,30 @@ def convert_content(old_type: str, content: dict, new_type: str) -> dict:
 
 
 # ============================================================ date helpers
-def due_badge(due: date | None, today: date) -> tuple[str, str] | None:
-    """(text, kind) for a due date; kind is overdue/today/tomorrow/later."""
+def due_badge(due: date | None, now: datetime, due_time: str | None = None) -> tuple[str, str] | None:
+    """(text, kind) for a due date and optional "HH:MM" time; kind is
+    overdue/today/tomorrow/later. With a time, a card becomes overdue once the
+    time has passed; without one, at the end of the day."""
     if due is None:
         return None
-    if due < today:
-        return "Overdue", "overdue"
+    today = now.date()
+    at = f" {due_time}" if due_time else ""
+    if due_time:
+        try:
+            h, m = (int(x) for x in due_time.split(":"))
+            passed = datetime(due.year, due.month, due.day, h, m) < now
+        except ValueError:
+            passed = due < today
+    else:
+        passed = due < today
+    if passed:
+        return ("Overdue" + (at if due == today else ""), "overdue")
     if due == today:
-        return "Today", "today"
+        return f"Today{at}", "today"
     if due == today + timedelta(days=1):
-        return "Tomorrow", "tomorrow"
+        return f"Tomorrow{at}", "tomorrow"
     fmt = "%a %d %b" if due.year == today.year else "%d %b %Y"
-    return f"Due {due.strftime(fmt).replace(' 0', ' ')}", "later"
+    return f"Due {due.strftime(fmt).replace(' 0', ' ')}{at}", "later"
 
 
 def reminder_text(ts: float, now: datetime) -> str:
@@ -1241,12 +1253,12 @@ class CardWidget(QFrame):
             self.meta.addWidget(badge(PRIORITY_LABELS[c.priority], col, blend(p.card_base, col, 0.18),
                                       tooltip="Priority"))
             shown = True
-        db = due_badge(c.due(), date.today())
+        db = due_badge(c.due(), datetime.now(), c.due_time)
         if db:
             text, kind = db
             col = {"overdue": p.danger, "today": p.accent, "tomorrow": p.info}.get(kind, p.muted)
             self.meta.addWidget(badge(text, col, blend(p.card_base, col, 0.18), "today",
-                                      f"Due {c.due_date}"))
+                                      f"Due {c.due_date}" + (f" at {c.due_time}" if c.due_time else "")))
             shown = True
         if c.remind_at:
             when = reminder_text(c.remind_at, datetime.now())
@@ -1317,8 +1329,11 @@ class CardWidget(QFrame):
         due.addAction("Tomorrow", lambda: self.set_due(today + timedelta(days=1)))
         due.addAction("Next week", lambda: self.set_due(next_monday(today)))
         due.addAction("Pick a date…", self._pick_due)
+        due.addAction("Pick date and time…", self._pick_due_time)
         if c.due_date:
             due.addSeparator()
+            if c.due_time:
+                due.addAction(f"Remove time ({c.due_time})", lambda: self.set_due(c.due(), None))
             due.addAction("Remove due date", lambda: self.set_due(None))
 
         rem = m.addMenu(make_icon("bell", self.p.muted), "Reminder")
@@ -1407,10 +1422,17 @@ class CardWidget(QFrame):
         self.refresh_meta()
         self._queue({"priority": level}, immediate=True)
 
-    def set_due(self, due: date | None) -> None:
+    _KEEP = object()
+
+    def set_due(self, due: date | None, due_time: "str | None | object" = _KEEP) -> None:
+        """Set the due date; the time is kept unless given (and cleared with the date)."""
         self.card.due_date = due.isoformat() if due else None
+        if due is None:
+            self.card.due_time = None
+        elif due_time is not CardWidget._KEEP:
+            self.card.due_time = due_time
         self.refresh_meta()
-        self._queue({"due_date": self.card.due_date}, immediate=True)
+        self._queue({"due_date": self.card.due_date, "due_time": self.card.due_time}, immediate=True)
         self.meta_changed.emit(self.card.id)
 
     def set_reminder(self, ts: float | None) -> None:
@@ -1431,6 +1453,18 @@ class CardWidget(QFrame):
                                    QDate(d.year, d.month, d.day) if d else None)
         if picked is not None:
             self.set_due(date(picked.year(), picked.month(), picked.day()))
+
+    def _pick_due_time(self) -> None:
+        d, t = self.card.due(), self.card.due_time
+        if d:
+            hh, mm = (int(x) for x in (t or "17:00").split(":"))
+            initial = QDateTime(QDate(d.year, d.month, d.day), QTime(hh, mm))
+        else:
+            initial = QDateTime(QDate.currentDate(), QTime(17, 0))
+        picked = dialogs.pick_datetime(self.window(), "Due date and time", initial)
+        if picked is not None:
+            pd, pt = picked.date(), picked.time()
+            self.set_due(date(pd.year(), pd.month(), pd.day()), f"{pt.hour():02d}:{pt.minute():02d}")
 
     def _pick_reminder(self) -> None:
         initial = QDateTime.fromSecsSinceEpoch(int(self.card.remind_at)) if self.card.remind_at else None

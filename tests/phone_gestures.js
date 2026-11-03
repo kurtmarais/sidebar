@@ -106,10 +106,23 @@ async function main() {
     && !(due.x + due.width <= rem.x || rem.x + rem.width <= due.x);
   out.datesFit = due.x + due.width <= 402 && rem.x + rem.width <= 402;
   out.markDoneGone = (await page.locator(".sheet :text('Mark done')").count()) === 0;
+  // due date + time side by side, not overlapping; time only usable once a date is set
+  const tm = await box(".meta input[type=time]");
+  out.timeDisabledFirst = await page.locator(".meta input[type=time]").isDisabled();
+  out.dateTimeOverlap = !(due.x + due.width <= tm.x || tm.x + tm.width <= due.x) &&
+    !(due.y + due.height <= tm.y || tm.y + tm.height <= due.y);
+  out.dateTimeFit = tm.x + tm.width <= 402;
+  const tomorrow = await page.evaluate(() => { const d = new Date(); d.setDate(d.getDate() + 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; });
+  await page.fill(".meta input[type=date]", tomorrow);
+  await page.dispatchEvent(".meta input[type=date]", "change");
+  await page.fill(".meta input[type=time]", "08:15");
+  await page.dispatchEvent(".meta input[type=time]", "change");
   out.deleteAtBottom = (await box(".delete-note")).y > due.y;
   if (shots) await page.screenshot({ path: shots + "/g-editor.png", fullPage: true });
   await page.click(".sheet-bar .primary-pill");
   await page.waitForTimeout(500);
+  out.gammaBadge = await page.locator(".card-wrap:has(.card-title:text-is('Gamma')) .badges").textContent();
 
   // new note left empty with Back: dropped; new note with a title: kept
   const n0 = (await titles()).length;
