@@ -158,7 +158,6 @@ class SidebarWindow(QWidget):
         self._context: tuple[str, str] | None = None     # last external foreground window
         self._link_mode = False
         self._alerts: list[int] = []                     # card ids with a reminder waiting
-        self._offered_meetings: set[str] = set()
         self._focus_end: float | None = None
         self.tray = None
         self._stale: set[int] = set()        # cards changed on the phone while being edited here
@@ -290,7 +289,7 @@ class SidebarWindow(QWidget):
         views.addStretch(1)
         lay.addLayout(views)
 
-        # Banners (reminders, meetings, link mode, focus)
+        # Banners (reminders, link mode, focus)
         self.banner_box = QVBoxLayout()
         self.banner_box.setSpacing(6)
         lay.addLayout(self.banner_box)
@@ -881,7 +880,7 @@ class SidebarWindow(QWidget):
         return winplatform.IS_WINDOWS and bool(self.s["follow_window"])
 
     def _update_context_timer(self) -> None:
-        wanted = winplatform.IS_WINDOWS and (self.s["follow_window"] or self.s["suggest_meeting_notes"])
+        wanted = self._follow_enabled()
         if wanted and not self.context_timer.isActive():
             self.context_timer.start(2000)
         elif not wanted:
@@ -897,8 +896,6 @@ class SidebarWindow(QWidget):
             if before != after or (after and old != self._context):
                 self.refresh()
         self._update_context_row()
-        if self.s["suggest_meeting_notes"]:
-            self._check_meeting(exe, title)
 
     def poll_context(self) -> None:
         fg = winplatform.foreground_window()
@@ -954,27 +951,6 @@ class SidebarWindow(QWidget):
         for w in self.list.widgets.values():
             w.set_link_mode(False)
         self.refresh()
-
-    def _check_meeting(self, exe: str, title: str) -> None:
-        name = winplatform.detect_meeting(exe, title)
-        if not name or name in self._offered_meetings:
-            return
-        self._offered_meetings.add(name)
-        if any(not w.card.archived and w.card.matches_window(exe, title) for w in self.list.widgets.values()):
-            return  # notes from last time are already shown first
-        self._show_banner("meeting", "link", f"You're in a meeting: {name}", "",
-                          [("Start meeting notes", lambda: self._start_meeting_notes(name), True),
-                           ("Not now", lambda: self._hide_banner("meeting"), False)])
-        self.expand()
-
-    def _start_meeting_notes(self, name: str) -> None:
-        self._hide_banner("meeting")
-        stamp = datetime.now().strftime("%d %b %Y")
-        w = self.add_card("note", focus=False, title=name, color="blue", link_title=name,
-                          content={"text": f"{stamp}\n\n"})
-        self.refresh()
-        self.expand(activate=True)
-        QTimer.singleShot(ANIM_MS + 20, w.body.focus_body)
 
     # ============================================================ geometry
     @property

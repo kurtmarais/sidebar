@@ -155,15 +155,6 @@ def test_link_mode_toggle(app, win, monkeypatch):
     win.stop_link_mode()
 
 
-def test_meeting_suggestion(app, win, monkeypatch):
-    monkeypatch.setattr(winplatform, "IS_WINDOWS", True)
-    win.set_context("zoom.exe", "Zoom Meeting")
-    assert "meeting" in win._banners
-    win._start_meeting_notes("Zoom meeting")
-    card = win.list.displayed[0].card
-    assert card.title == "Zoom meeting" and card.link_title == "Zoom meeting"
-
-
 def test_secret_card(app, win):
     w = win.add_card("secret", focus=False, title="Bank")
     body = w.body
@@ -269,7 +260,6 @@ def test_settings_save_and_persist(app, win, monkeypatch, tmp_path):
         dlg.on_top.setChecked(False)
         dlg.hotkey.setChecked(False)
         dlg.follow.setChecked(False)
-        dlg.meetings.setChecked(False)
         return QDialog.DialogCode.Accepted
 
     monkeypatch.setattr(dialogs, "run", fill_and_save)
@@ -281,7 +271,6 @@ def test_settings_save_and_persist(app, win, monkeypatch, tmp_path):
         "show_quickbar": False, "focus_sound_url": "https://youtu.be/co7KgV2edvI",
         "focus_sound_name": "Cabin", "launch_app_path": r"C:\Tools\caffeine64.exe",
         "always_on_top": False, "hotkey_enabled": False, "follow_window": False,
-        "suggest_meeting_notes": False,
     }
     assert win.title_label.text() == "Kurt's board"        # applied immediately
     assert win.p.name == "light" and win.quickbar.isHidden()

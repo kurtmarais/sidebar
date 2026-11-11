@@ -6,7 +6,6 @@ import pytest
 
 from sidebar_app import backup, secrets_store
 from sidebar_app.storage import Database
-from sidebar_app.winplatform import detect_meeting
 
 
 @pytest.fixture
@@ -141,20 +140,6 @@ def test_pin_guard_lockout():
     assert g.wait_seconds() == 30
     now[0] += 31
     assert g.wait_seconds() == 0
-
-
-# --------------------------------------------------------------- meetings
-@pytest.mark.parametrize("exe,title,expected", [
-    ("chrome.exe", "Meet - abc-defg-hij - Google Chrome", "Google Meet"),
-    ("msedge.exe", "Meet - Weekly sync and 2 more pages - Personal - Microsoft​ Edge", "Weekly sync"),
-    ("zoom.exe", "Zoom Meeting", "Zoom meeting"),
-    ("ms-teams.exe", "Weekly sync | Meeting | Microsoft Teams", "Weekly sync"),
-    ("ms-teams.exe", "Chat | Dana | Microsoft Teams", None),
-    ("slack.exe", "Huddle with Dana - Slack", "Slack huddle"),
-    ("excel.exe", "Budget.xlsx - Excel", None),
-])
-def test_detect_meeting(exe, title, expected):
-    assert detect_meeting(exe, title) == expected
 
 
 # ------------------------------------------------------------- due times

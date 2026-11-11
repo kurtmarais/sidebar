@@ -45,7 +45,6 @@ Dropping `.py`, `.js`, `.sql`, `.json` or `.txt` files creates a Code card.
 **Notes that follow your window** (Windows)
 - Link a card to an app (for example `excel.exe`), or to windows whose title contains a word. While that window is in front, the card appears at the top under *For this window*.
 - **Link notes** next to the *In front:* line lets you click the notes to link to the current app. The card menu has finer options.
-- When a Teams, Zoom, Google Meet, Webex or Slack huddle window is detected, the sidebar offers **Start meeting notes**. This creates a note named after the meeting, and the note is shown first the next time that meeting comes round.
 - Only the title and program name of the front window are read. Nothing is stored or sent. Both features can be turned off in Settings.
 
 **Data and backups**
@@ -55,7 +54,7 @@ Dropping `.py`, `.js`, `.sql`, `.json` or `.txt` files creates a Code card.
 - **Restore backup** adds missing notes and never overwrites or deletes existing ones, so it is safe to run more than once. A snapshot is taken first.
 - **Export as Markdown** gives a readable copy of all non-secret notes.
 
-**Settings** (gear icon): side, monitor, panel width, dark or light theme, open by hover and/or click, open delay, strip length, focus length, keep on top, Ctrl+Shift+S, notes that follow your window, meeting notes, and **Start with Windows**. Start with Windows is also what keeps reminders working, since the app must be running to alert you.
+**Settings** (gear icon): side, monitor, panel width, dark or light theme, open by hover and/or click, open delay, strip length, focus length, keep on top, Ctrl+Shift+S, notes that follow your window, and **Start with Windows**. Start with Windows is also what keeps reminders working, since the app must be running to alert you.
 
 **Phone sync** (optional): edit your notes, checklists, code and links cards from your phone through your own Supabase project. It works while the PC is off. Set it up with [docs/phone-sync.md](docs/phone-sync.md), then turn it on under gear → **Phone sync…**.
 
@@ -141,7 +140,7 @@ sidebar_app/
   sync_qt.py       background sync and the Phone sync dialog
 supabase/migrations/ database tables and access rules for Supabase
 web/               the phone app (static files: deploy the folder as-is)
-  winplatform.py   Windows APIs: startup entry, hotkey, front window, DPAPI, meeting detection
+  winplatform.py   Windows APIs: startup entry, hotkey, front window, DPAPI
   dialogs.py       settings and date pickers
   theme.py         colours, stylesheet, drawn icons
 ```

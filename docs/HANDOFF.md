@@ -22,7 +22,7 @@ sidebar_app/
   sync_qt.py           background sync controller (daemon thread) + "Phone sync…" dialog
   quickbar.py          tiles: focus sound (YouTube in off-the-record Qt WebEngine, loaded lazily), app launcher (caffeine64.exe)
   updater.py           git pull --ff-only on quit / "Update and restart"
-  winplatform.py       Windows: startup (Run key + Startup-folder shortcut), hotkey, DPAPI, foreground window, meeting detection
+  winplatform.py       Windows: startup (Run key + Startup-folder shortcut), hotkey, DPAPI, foreground window
   secrets_store.py     PIN/passphrase-locked notes (PBKDF2 + DPAPI)
   dialogs.py, theme.py, backup.py, paths.py
 supabase/migrations/   20261101120000_sidebar_sync.sql (tables, RLS, newest-wins trigger), 20261102090000_starred.sql, 20261103090000_due_time.sql

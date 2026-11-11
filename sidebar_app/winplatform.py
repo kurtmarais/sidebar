@@ -1,5 +1,5 @@
-"""Windows integration: startup entry, global hotkey, foreground window,
-DPAPI encryption and meeting detection.
+"""Windows integration: startup entry, global hotkey, foreground window
+and DPAPI encryption.
 
 All functions degrade to no-ops (or ``None``) on other platforms so the
 rest of the app, and the tests, run anywhere.
@@ -8,7 +8,6 @@ rest of the app, and the tests, run anywhere.
 from __future__ import annotations
 
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -354,44 +353,3 @@ def dpapi_unprotect(data: bytes, entropy: bytes) -> bytes:
         return ctypes.string_at(out.pbData, out.cbData)
     finally:
         _kernel32.LocalFree(ctypes.cast(out.pbData, ctypes.c_void_p))
-
-
-# ------------------------------------------------------ meeting detection
-_BROWSERS = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe",
-             "vivaldi.exe", "arc.exe"}
-_BROWSER_SUFFIX = re.compile(
-    r"\s+[-–—]\s+(Google Chrome|Microsoft\u200b? ?Edge|Mozilla Firefox|Brave|Opera|Vivaldi)$|"
-    r"\s+and \d+ more pages?.*$|\s+[-–—]\s+(Personal|Work|Profile \d+).*$")
-
-
-def detect_meeting(exe: str, title: str) -> str | None:
-    """Return a meeting name if the window looks like an active call.
-
-    Heuristic, based on window titles of Teams, Zoom, Google Meet, Webex
-    and Slack huddles. Returns ``None`` when it is not a meeting.
-    """
-    exe = (exe or "").lower()
-    title = (title or "").strip()
-    if not title:
-        return None
-    if exe in _BROWSERS:
-        title = _BROWSER_SUFFIX.sub("", title).strip()
-    low = title.lower()
-
-    m = re.match(r"^Meet\s*[-–—:]\s*(.+)$", title)
-    if m and (exe in _BROWSERS or not exe):
-        name = m.group(1).strip()
-        return "Google Meet" if re.fullmatch(r"[a-z]{3}-[a-z]{4}-[a-z]{3}", name) else name
-    if "zoom meeting" in low or "zoom webinar" in low:
-        return "Zoom meeting"
-    if exe in ("ms-teams.exe", "teams.exe") or low.endswith("| microsoft teams"):
-        parts = [p.strip() for p in title.split("|")]
-        if any(w in low for w in ("meeting", "call", "meet now")) and not low.startswith("chat"):
-            return parts[0] or "Teams meeting"
-        return None
-    if exe in ("webexmta.exe", "ciscocollabhost.exe", "webex.exe", "atmgr.exe") and "meeting" in low:
-        return title.split(" - ")[0].strip() or "Webex meeting"
-    if exe == "slack.exe" and "huddle" in low:
-        name = re.sub(r"(?i)\s*[-–—|]?\s*huddle.*$", "", title).replace("Slack", "").strip(" -|")
-        return f"Huddle: {name}" if name else "Slack huddle"
-    return None

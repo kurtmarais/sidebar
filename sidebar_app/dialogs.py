@@ -218,11 +218,6 @@ class SettingsDialog(QDialog):
         self.follow.setEnabled(winplatform.IS_WINDOWS)
         form.addRow("", self.follow)
 
-        self.meetings = QCheckBox("Suggest meeting notes when a call starts")
-        self.meetings.setChecked(bool(settings["suggest_meeting_notes"]))
-        self.meetings.setEnabled(winplatform.IS_WINDOWS)
-        form.addRow("", self.meetings)
-
         self.startup = QCheckBox("Start with Windows")
         self.startup.setToolTip("Also keeps reminders working, since the sidebar must be running to alert you.")
         self.startup.setChecked(winplatform.is_startup_enabled())
@@ -271,7 +266,6 @@ class SettingsDialog(QDialog):
             "always_on_top": self.on_top.isChecked(),
             "hotkey_enabled": self.hotkey.isChecked(),
             "follow_window": self.follow.isChecked(),
-            "suggest_meeting_notes": self.meetings.isChecked(),
         }
 
     def startup_enabled(self) -> bool:
