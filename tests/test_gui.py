@@ -425,3 +425,43 @@ def test_show_card_from_calendar(app, win):
     win.set_view(VIEW_ARCHIVE)
     win.calendar.open_card.emit(w.card.id)
     assert win.list.view == "cards" and w in win.list.displayed
+
+
+def _mouse(widget, kind, y, buttons):
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    local = QPointF(2, y)
+    glob = QPointF(widget.mapToGlobal(local.toPoint()))
+    btn = Qt.LeftButton if kind != QEvent.MouseMove else Qt.NoButton
+    ev = QMouseEvent(kind, local, glob, btn, buttons, Qt.NoModifier)
+    QApplication.sendEvent(widget, ev)
+
+
+def test_strip_moves_only_after_press_and_hold(app, win):
+    from PySide6.QtCore import QEvent, Qt
+    strip = win.strip
+    clicks = []
+    strip.clicked.connect(lambda: clicks.append(1))
+    start = win.s["strip_position"]
+
+    # Quick press and drag: nothing moves, and it isn't a click either.
+    _mouse(strip, QEvent.MouseButtonPress, 20, Qt.LeftButton)
+    _mouse(strip, QEvent.MouseMove, 200, Qt.LeftButton)
+    strip.hold_timer.timeout.emit()          # the hold time passes after moving
+    _mouse(strip, QEvent.MouseMove, 260, Qt.LeftButton)
+    _mouse(strip, QEvent.MouseButtonRelease, 260, Qt.NoButton)
+    assert win.s["strip_position"] == start and not clicks
+
+    # Press and hold, then drag: the strip moves and the position is saved.
+    _mouse(strip, QEvent.MouseButtonPress, 20, Qt.LeftButton)
+    strip.hold_timer.timeout.emit()
+    assert strip._dragging
+    _mouse(strip, QEvent.MouseMove, 400, Qt.LeftButton)
+    _mouse(strip, QEvent.MouseButtonRelease, 400, Qt.NoButton)
+    assert win.s["strip_position"] != start and not clicks
+    assert Database(win.db.path).settings()["strip_position"] == win.s["strip_position"]
+
+    # A short click still opens the panel.
+    _mouse(strip, QEvent.MouseButtonPress, 20, Qt.LeftButton)
+    _mouse(strip, QEvent.MouseButtonRelease, 20, Qt.NoButton)
+    assert clicks == [1]

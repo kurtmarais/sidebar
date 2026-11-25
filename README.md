@@ -9,7 +9,7 @@ The design and feature set follow [Notiq](https://notiq-app.com/), without its A
 **Opening and closing**
 - Rest the cursor on the blue strip for 0.3 s (adjustable up to 3 s) and the panel slides out. You can also click the strip, press **Ctrl+Shift+S** from any app, or click the tray icon.
 - The panel slides away when the cursor leaves. It stays open while you are typing in a card, while a reminder is waiting, or while it is **pinned** (pin icon in the header).
-- Drag the strip up or down to move it. Drag the panel header to the other side of the screen, or to another monitor, and it snaps there.
+- Press and hold the strip for about half a second (it turns yellow), then drag it up or down to move it. A quick press-and-drag does nothing, so it can't be moved by accident. Drag the panel header to the other side of the screen, or to another monitor, and it snaps there.
 - The strip covers only part of the edge, so it never catches the cursor in screen corners or on window close buttons.
 
 **Quick tiles** (top of the panel)

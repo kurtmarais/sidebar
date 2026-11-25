@@ -52,7 +52,11 @@ NEW_TYPES = ("note", "checklist", "code", "links", "secret")
 
 
 class EdgeStrip(QWidget):
-    """The thin strip at the screen edge. Click toggles; drag moves it up or down."""
+    """The thin strip at the screen edge. Click toggles; press and hold, then
+    drag, moves it up or down (a quick press-and-drag does nothing, so the
+    strip can't be moved by accident)."""
+
+    HOLD_MS = 450
 
     clicked = Signal()
     dragged = Signal(int)       # global y of cursor
@@ -62,10 +66,20 @@ class EdgeStrip(QWidget):
         super().__init__(win)
         self.win = win
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("Sidebar: rest here or click to open · drag to move")
+        self.setToolTip("Sidebar: rest here or click to open · press and hold, then drag to move")
         self._press_y: int | None = None
+        self._moved = False
         self._dragging = False
         self._hover = False
+        self.hold_timer = QTimer(self, singleShot=True, interval=self.HOLD_MS)
+        self.hold_timer.timeout.connect(self._arm_drag)
+
+    def _arm_drag(self) -> None:
+        if self._press_y is None or self._moved or self.win.progress != 0:
+            return
+        self._dragging = True
+        self.setCursor(Qt.SizeVerCursor)
+        self.update()
 
     def enterEvent(self, e):  # noqa: N802
         self._hover = True
@@ -81,8 +95,8 @@ class EdgeStrip(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         pal = self.win.p
-        color = QColor(pal.strip_hover if self._hover else pal.strip)
-        w = 4.0
+        color = QColor(pal.accent if self._dragging else pal.strip_hover if self._hover else pal.strip)
+        w = 6.0 if self._dragging else 4.0
         x = self.width() - w if self.win.edge == "right" else 0.0
         path = QPainterPath()
         path.addRoundedRect(x, 0, w, self.height(), 2, 2)
@@ -91,28 +105,33 @@ class EdgeStrip(QWidget):
     def mousePressEvent(self, e):  # noqa: N802
         if e.button() == Qt.LeftButton:
             self._press_y = int(e.globalPosition().y())
+            self._moved = False
             self._dragging = False
+            self.hold_timer.start()
 
     def mouseMoveEvent(self, e):  # noqa: N802
         if self._press_y is None:
             return
         gy = int(e.globalPosition().y())
-        if not self._dragging and abs(gy - self._press_y) > 6 and self.win.progress == 0:
-            self._dragging = True
-            self.setCursor(Qt.SizeVerCursor)
         if self._dragging:
             self.dragged.emit(gy)
+        elif abs(gy - self._press_y) > 6:
+            self._moved = True          # moved before the hold completed: not a drag
+            self.hold_timer.stop()
 
     def mouseReleaseEvent(self, e):  # noqa: N802
         if e.button() != Qt.LeftButton:
             return
+        self.hold_timer.stop()
         if self._dragging:
             self.drag_finished.emit()
             self.setCursor(Qt.PointingHandCursor)
-        else:
+        elif not self._moved:
             self.clicked.emit()
         self._press_y = None
+        self._moved = False
         self._dragging = False
+        self.update()
 
 
 class Header(QWidget):
