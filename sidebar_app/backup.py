@@ -93,4 +93,11 @@ def export_markdown(db: Database, path: Path) -> None:
             elif c.type in ("image", "file"):
                 lines.append(f"[{c.type}: {body.get('name', '')}]")
             lines.append("")
+    entries = db.calendar_entries()
+    if entries:
+        lines += ["## Calendar", ""]
+        for e in entries:
+            text = e.text.strip().replace("\n", " / ") or "(marked)"
+            lines.append(f"- {e.date:%a %d %b %Y}: {text}")
+        lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")

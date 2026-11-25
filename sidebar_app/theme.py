@@ -171,6 +171,16 @@ def stylesheet(p: Palette) -> str:
     }}
     #banner[kind="reminder"] {{ border: 1px solid {p.accent}; }}
     #banner[kind="link"] {{ border: 1px solid {p.strip}; }}
+    #calendar {{
+        background: {p.surface}; border: 1px solid {p.panel_border}; border-radius: 12px;
+    }}
+    #calendarTitle {{ font-weight: 700; color: {p.text}; padding: 3px 6px; }}
+    #calendarStep {{ font-size: 13pt; font-weight: 700; color: {p.muted}; padding: 0 7px; }}
+    #calendarStep:hover {{ color: {p.text}; }}
+    #calendarItem {{ border-radius: 7px; background: transparent; }}
+    #calendarItem:hover {{ background: {p.hover}; }}
+    #upcoming #calendarItem {{ background: {p.surface}; border: 1px solid {p.panel_border}; }}
+    #upcoming #calendarItem:hover {{ background: {p.hover}; }}
     QTabBar {{ qproperty-drawBase: 0; }}
     QTabBar::tab {{
         background: transparent; color: {p.muted}; border: none;

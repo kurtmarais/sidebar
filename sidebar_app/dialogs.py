@@ -202,6 +202,21 @@ class SettingsDialog(QDialog):
         app_row.addWidget(browse)
         form.addRow("App to start", app_row)
 
+        cal_row = QHBoxLayout()
+        self.calendar = QCheckBox("Show")
+        self.calendar.setChecked(bool(settings["show_calendar"]))
+        self.lead = QSpinBox()
+        self.lead.setRange(0, 365)
+        self.lead.setPrefix("new notes: heads-up ")
+        self.lead.setSuffix(" days before")
+        self.lead.setSpecialValueText("new notes: heads-up on the day")
+        self.lead.setValue(int(settings["calendar_lead_days"]))
+        self.lead.setToolTip("How early a calendar note appears at the top of your notes.\n"
+                             "Each note can have its own setting.")
+        cal_row.addWidget(self.calendar)
+        cal_row.addWidget(self.lead, 1)
+        form.addRow("Calendar", cal_row)
+
         self.on_top = QCheckBox("Keep above other windows")
         self.on_top.setChecked(bool(settings["always_on_top"]))
         form.addRow("", self.on_top)
@@ -266,6 +281,8 @@ class SettingsDialog(QDialog):
             "always_on_top": self.on_top.isChecked(),
             "hotkey_enabled": self.hotkey.isChecked(),
             "follow_window": self.follow.isChecked(),
+            "show_calendar": self.calendar.isChecked(),
+            "calendar_lead_days": self.lead.value(),
         }
 
     def startup_enabled(self) -> bool:

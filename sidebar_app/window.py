@@ -13,7 +13,7 @@ import os
 import shutil
 import time
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -32,6 +32,7 @@ from PySide6.QtGui import QDesktopServices
 
 from . import backup, dialogs, updater, winplatform
 from .cardlist import VIEW_ARCHIVE, VIEW_CARDS, VIEW_TODAY, BoardTabBar, CardList, today_section
+from .calendar_panel import CalendarPanel, DueCard, UpcomingBox
 from .quickbar import QuickBar
 from .sync_qt import SyncController, SyncDialog, last_sync_text
 from .cards import (
@@ -334,6 +335,12 @@ class SidebarWindow(QWidget):
         self.context_row.hide()
         lay.addWidget(self.context_row)
 
+        # Calendar notes whose heads-up period has started
+        self.upcoming = UpcomingBox()
+        self.upcoming.day_clicked.connect(self.show_day)
+        self.upcoming.hide()
+        lay.addWidget(self.upcoming)
+
         # Cards
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -343,6 +350,15 @@ class SidebarWindow(QWidget):
         self.list.order_changed.connect(lambda ids: (self.db.set_card_order(ids), self._local_change()))
         self.scroll.setWidget(self.list)
         lay.addWidget(self.scroll, 1)
+
+        # Month calendar (local only, never synced)
+        self.calendar = CalendarPanel(self.p, self.db, self._due_cards, self.s.get)
+        self.calendar.changed.connect(self._refresh_upcoming)
+        self.calendar.open_card.connect(self.show_card)
+        self.calendar.card_dropped.connect(self._card_to_day)
+        self.calendar.open_changed.connect(lambda on: self._put_setting("calendar_open", on))
+        self.calendar.setVisible(bool(self.s["show_calendar"]))
+        lay.addWidget(self.calendar)
 
         # Footer
         foot = QHBoxLayout()
@@ -420,6 +436,9 @@ class SidebarWindow(QWidget):
     def _save_card(self, card_id: int, fields: dict) -> None:
         self.db.update_card(card_id, **fields)
         self._local_change()
+        w = self.list.widgets.get(card_id)
+        if "title" in fields and w is not None and w.card.due_date:
+            self.calendar.refresh()
 
     def _local_change(self) -> None:
         self.syncer.local_change()
@@ -548,11 +567,63 @@ class SidebarWindow(QWidget):
         if self.list.view == VIEW_TODAY or self.list.context:
             self.refresh()
         self._update_today_count()
+        self._refresh_calendar()
 
     def _refresh_badges(self) -> None:
         for w in self.list.widgets.values():
             w.refresh_meta()
         self._update_today_count()
+        self._refresh_calendar()
+
+    # ------------------------------------------------------------ calendar
+    def _due_cards(self, start: date, end: date) -> list[DueCard]:
+        out = []
+        for w in self.list.widgets.values():
+            c = w.card
+            due = c.due()
+            if due and not c.archived and start <= due <= end:
+                out.append(DueCard(c.id, c.title, c.color, due, c.due_time))
+        return out
+
+    def _refresh_calendar(self) -> None:
+        if self.s["show_calendar"]:
+            self.calendar.refresh()
+        self._refresh_upcoming()
+
+    def _refresh_upcoming(self) -> None:
+        show = (bool(self.s["show_calendar"]) and self.list.view == VIEW_CARDS
+                and not self.search.text().strip())
+        n = self.upcoming.set_entries(self.db.upcoming_entries(), date.today()) if show else 0
+        self.upcoming.setVisible(n > 0)
+
+    def show_day(self, d: date) -> None:
+        if not self.s["show_calendar"]:
+            return
+        self.calendar.select(d)
+
+    def show_card(self, card_id: int) -> None:
+        """Bring a card into view in the Notes list (from the calendar)."""
+        w = self.list.widgets.get(card_id)
+        if w is None:
+            return
+        if self.search.text():
+            self.search.clear()
+        if self.list.view != VIEW_CARDS:
+            self.set_view(VIEW_CARDS)
+        bid = self.tabs.board_id(self.tabs.currentIndex()) if self.tabs.count() else 0
+        if bid not in (0, w.card.board_id):
+            self.tabs.setCurrentIndex(0)
+        self.refresh()
+        self.expand(activate=True)
+        QTimer.singleShot(0, lambda: self.scroll.ensureWidgetVisible(w, 0, 40))
+
+    def _card_to_day(self, card_id: int, d: date) -> None:
+        """A card dropped on a calendar day takes that day as its due date."""
+        w = self.list.widgets.get(card_id)
+        if w is None or w.card.archived:
+            return
+        w.set_due(d)
+        self.calendar.select(d)
 
     # ----------------------------------------------------- files and paste
     def _store_image(self, image: QImage, name: str) -> CardWidget | None:
@@ -646,6 +717,7 @@ class SidebarWindow(QWidget):
         self.refresh_count()
         self._update_today_count()
         self._update_context_row()
+        self._refresh_calendar()
 
     def refresh_count(self) -> None:
         n = getattr(self, "_shown", 0)
@@ -1347,6 +1419,8 @@ class SidebarWindow(QWidget):
         self.list.set_indicator_color(self.p.accent)
         self.quickbar.apply_theme(self.p)
         self.quickbar.setVisible(bool(self.s["show_quickbar"]))
+        self.calendar.apply_theme(self.p)
+        self.calendar.setVisible(bool(self.s["show_calendar"]))
         if restyle:
             for w in self.list.widgets.values():
                 w.apply_theme()

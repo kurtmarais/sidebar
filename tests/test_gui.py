@@ -8,7 +8,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtGui import QColor, QImage  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog, QLabel  # noqa: E402
 
 from sidebar_app import winplatform  # noqa: E402
 from sidebar_app.cardlist import VIEW_ARCHIVE, VIEW_TODAY  # noqa: E402
@@ -260,6 +260,8 @@ def test_settings_save_and_persist(app, win, monkeypatch, tmp_path):
         dlg.on_top.setChecked(False)
         dlg.hotkey.setChecked(False)
         dlg.follow.setChecked(False)
+        dlg.calendar.setChecked(False)
+        dlg.lead.setValue(7)
         return QDialog.DialogCode.Accepted
 
     monkeypatch.setattr(dialogs, "run", fill_and_save)
@@ -271,6 +273,7 @@ def test_settings_save_and_persist(app, win, monkeypatch, tmp_path):
         "show_quickbar": False, "focus_sound_url": "https://youtu.be/co7KgV2edvI",
         "focus_sound_name": "Cabin", "launch_app_path": r"C:\Tools\caffeine64.exe",
         "always_on_top": False, "hotkey_enabled": False, "follow_window": False,
+        "show_calendar": False, "calendar_lead_days": 7,
     }
     assert win.title_label.text() == "Kurt's board"        # applied immediately
     assert win.p.name == "light" and win.quickbar.isHidden()
@@ -331,3 +334,94 @@ def test_focus_sound_engine_loads_on_first_play(app, monkeypatch):
 def DARK_PALETTE():
     from sidebar_app.theme import DARK
     return DARK
+
+
+# ------------------------------------------------------------- calendar
+def test_calendar_shows_entries_and_due_cards(app, win):
+    from datetime import date, timedelta
+    from sidebar_app.theme import card_accent
+    today = date.today()
+    win.db.add_calendar_entry(today, "Dentist", "teal", 0)
+    win.db.add_calendar_entry(today, "", "green", None)            # plain mark
+    w = win.add_card("note", focus=False, title="Report", color="red")
+    w.set_due(today, "14:00")
+    win.calendar.go_today()
+    assert win.calendar.grid.dots[today] == [card_accent("teal"), card_accent("red")]
+    assert win.calendar.grid.marks[today] == card_accent("green")
+    texts = [lab.text() for lab in win.calendar.findChildren(QLabel) if not lab.isHidden()]
+    assert "Dentist" in texts and "Marked" in texts and "Report" in texts and "due 14:00" in texts
+    # Archived cards leave the calendar.
+    win.archive_card(w.card.id, True)
+    assert win.calendar.grid.dots[today] == [card_accent("teal")]
+
+
+def test_card_dropped_on_day_gets_due_date(app, win):
+    from datetime import date, timedelta
+    w = win.add_card("note", focus=False, title="Pay rent")
+    w.set_due(date.today(), "09:30")
+    target = date.today() + timedelta(days=10)
+    win.calendar.card_dropped.emit(w.card.id, target)
+    card = win.db.card(w.card.id)
+    assert card.due_date == target.isoformat() and card.due_time == "09:30"   # time kept
+    assert win.calendar.grid.selected == target
+
+
+def test_calendar_add_entry_and_coming_up(app, win, monkeypatch):
+    from datetime import date, timedelta
+    from sidebar_app import calendar_panel
+    day = date.today() + timedelta(days=2)
+
+    def fill(dlg):
+        dlg.text.setPlainText("Mum's birthday")
+        dlg.color.setCurrentIndex(dlg.color.findData("pink"))
+        dlg.lead.setValue(5)
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(calendar_panel.dialogs, "run", fill)
+    win.calendar.add_entry(day)
+    [e] = win.db.calendar_entries()
+    assert (e.date, e.text, e.color, e.lead_days) == (day, "Mum's birthday", "pink", 5)
+    assert not win.upcoming.isHidden()
+    labels = [lab.text() for lab in win.upcoming.findChildren(QLabel)]
+    assert "Mum's birthday" in labels and any(t.startswith("in 2 days") for t in labels)
+    # Not shown while searching or outside the Notes view.
+    win.set_view(VIEW_ARCHIVE)
+    assert win.upcoming.isHidden()
+    win.set_view("cards")
+
+    # Edit: switch the heads-up off.
+    def no_notify(dlg):
+        dlg.notify.setChecked(False)
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(calendar_panel.dialogs, "run", no_notify)
+    win.calendar.edit_entry(e.id)
+    assert win.db.calendar_entry(e.id).lead_days is None
+    assert win.upcoming.isHidden()
+
+    def delete(dlg):
+        dlg._delete()
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(calendar_panel.dialogs, "run", delete)
+    win.calendar.edit_entry(e.id)
+    assert win.db.calendar_entries() == []
+
+
+def test_calendar_fold_and_hide(app, win, tmp_path):
+    win.calendar.set_open(False)
+    assert win.calendar.body.isHidden()
+    assert Database(win.db.path).settings()["calendar_open"] is False
+    win.s["show_calendar"] = False
+    win.apply_theme()
+    assert win.calendar.isHidden()
+
+
+def test_show_card_from_calendar(app, win):
+    w = win.add_card("note", focus=False, title="Find me")
+    other = win.db.boards()[1].id
+    win.move_card(w.card.id, other)
+    win.tabs.setCurrentIndex(1)                 # a different category
+    win.set_view(VIEW_ARCHIVE)
+    win.calendar.open_card.emit(w.card.id)
+    assert win.list.view == "cards" and w in win.list.displayed

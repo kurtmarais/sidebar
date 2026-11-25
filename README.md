@@ -42,6 +42,13 @@ Dropping `.py`, `.js`, `.sql`, `.json` or `.txt` files creates a Code card.
 - **Ctrl+F** searches titles, notes, checklist items, code, links and file names. Secret notes are searched by title only.
 - **Focus session**: a timer from the settings menu or a reminder (25 min by default).
 
+**Calendar**
+- A month view at the bottom of the sidebar. **‹ ›** or the mouse wheel change month; the month name jumps back to today; the arrow folds it down to one line.
+- Double-click a day (or **+ Add**) to put a note on it, or leave the text empty to just colour the day. Right-click a note to edit or delete it.
+- Notes with a due date show on their day as a dot in the card's colour. Drag a card onto a day to set its due date (its time is kept).
+- **Coming up**: a calendar note can appear at the top of your notes a chosen number of days before its day (default 3, set in Settings, and per note).
+- The calendar is the sidebar's own. It stays on this PC and is never synced to the phone, Outlook, Teams or Google. It is included in backups.
+
 **Notes that follow your window** (Windows)
 - Link a card to an app (for example `excel.exe`), or to windows whose title contains a word. While that window is in front, the card appears at the top under *For this window*.
 - **Link notes** next to the *In front:* line lets you click the notes to link to the current app. The card menu has finer options.
@@ -54,7 +61,7 @@ Dropping `.py`, `.js`, `.sql`, `.json` or `.txt` files creates a Code card.
 - **Restore backup** adds missing notes and never overwrites or deletes existing ones, so it is safe to run more than once. A snapshot is taken first.
 - **Export as Markdown** gives a readable copy of all non-secret notes.
 
-**Settings** (gear icon): side, monitor, panel width, dark or light theme, open by hover and/or click, open delay, strip length, focus length, keep on top, Ctrl+Shift+S, notes that follow your window, and **Start with Windows**. Start with Windows is also what keeps reminders working, since the app must be running to alert you.
+**Settings** (gear icon): side, monitor, panel width, dark or light theme, open by hover and/or click, open delay, strip length, focus length, keep on top, Ctrl+Shift+S, notes that follow your window, calendar, and **Start with Windows**. Start with Windows is also what keeps reminders working, since the app must be running to alert you.
 
 **Phone sync** (optional): edit your notes, checklists, code and links cards from your phone through your own Supabase project. It works while the PC is off. Set it up with [docs/phone-sync.md](docs/phone-sync.md), then turn it on under gear → **Phone sync…**.
 
@@ -140,6 +147,7 @@ sidebar_app/
   sync_qt.py       background sync and the Phone sync dialog
 supabase/migrations/ database tables and access rules for Supabase
 web/               the phone app (static files: deploy the folder as-is)
+  calendar_panel.py  month calendar, day notes, Coming up
   winplatform.py   Windows APIs: startup entry, hotkey, front window, DPAPI
   dialogs.py       settings and date pickers
   theme.py         colours, stylesheet, drawn icons

@@ -15,7 +15,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Card types that sync to the phone (Supabase). Images, files and secrets stay on the PC.
 SYNC_TYPES = ("note", "checklist", "code", "links")
@@ -48,6 +48,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "focus_sound_browser": False, # True = open YouTube in the browser instead of playing in-app
     "launch_app_path": "",        # "" = look for caffeine64.exe
     "launch_app_name": "",
+    "show_calendar": True,        # month calendar at the bottom of the panel
+    "calendar_open": True,        # expanded (True) or folded to its header row
+    "calendar_lead_days": 3,      # default heads-up for new calendar notes
 }
 
 
@@ -139,6 +142,36 @@ _COLUMNS = (
     "collapsed", "priority", "due_date", "remind_at", "archived", "archived_at",
     "link_app", "link_title", "created_at", "updated_at", "starred", "due_time",
 )
+
+
+@dataclass
+class CalEntry:
+    """A mark or note on one day of the sidebar's calendar.
+
+    ``lead_days``: show it at the top of the notes this many days before
+    (0 = on the day only); ``None`` = never.
+    """
+    id: int
+    uid: str
+    day: str            # ISO date
+    text: str = ""
+    color: str = "blue"
+    lead_days: int | None = None
+    created_at: float = 0.0
+    updated_at: float = 0.0
+
+    @property
+    def date(self) -> date:
+        return date.fromisoformat(self.day)
+
+    @property
+    def headline(self) -> str:
+        return self.text.strip().splitlines()[0] if self.text.strip() else ""
+
+
+def _entry_from_row(row: sqlite3.Row) -> CalEntry:
+    return CalEntry(row["id"], row["uid"], row["day"], row["text"], row["color"], row["lead_days"],
+                    row["created_at"], row["updated_at"])
 
 
 def _card_from_row(row: sqlite3.Row) -> Card:
@@ -249,6 +282,24 @@ class Database:
         if version < 4:
             with self.conn:
                 self.conn.execute("ALTER TABLE cards ADD COLUMN due_time TEXT")
+                self.conn.execute("PRAGMA user_version = 4")
+            version = 4
+        if version < 5:
+            # The sidebar's own calendar. Local only: never synced to the phone or
+            # to any other calendar.
+            with self.conn:
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS calendar_entries (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        uid TEXT NOT NULL UNIQUE,
+                        day TEXT NOT NULL,
+                        text TEXT NOT NULL DEFAULT '',
+                        color TEXT NOT NULL DEFAULT 'blue',
+                        lead_days INTEGER,
+                        created_at REAL NOT NULL,
+                        updated_at REAL NOT NULL
+                    )""")
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_calendar_day ON calendar_entries(day)")
                 self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def _seed(self) -> None:
@@ -540,6 +591,54 @@ class Database:
             "AND archived = 0 ORDER BY remind_at", (now,))
         return [_card_from_row(r) for r in rows]
 
+    # --------------------------------------------------------------- calendar
+    def calendar_entries(self, start: date | None = None, end: date | None = None) -> list[CalEntry]:
+        """Entries from ``start`` to ``end`` inclusive (all when not given), by day."""
+        sql, args = "SELECT * FROM calendar_entries", []
+        if start and end:
+            sql += " WHERE day BETWEEN ? AND ?"
+            args = [start.isoformat(), end.isoformat()]
+        rows = self.conn.execute(sql + " ORDER BY day, id", args)
+        return [_entry_from_row(r) for r in rows]
+
+    def calendar_entry(self, entry_id: int) -> CalEntry | None:
+        row = self.conn.execute("SELECT * FROM calendar_entries WHERE id = ?", (entry_id,)).fetchone()
+        return _entry_from_row(row) if row else None
+
+    def add_calendar_entry(self, day: date, text: str = "", color: str = "blue",
+                           lead_days: int | None = None) -> CalEntry:
+        now = time.time()
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO calendar_entries(uid, day, text, color, lead_days, created_at, updated_at) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?)",
+                (uuid.uuid4().hex, day.isoformat(), text, color, lead_days, now, now))
+        return self.calendar_entry(cur.lastrowid)  # type: ignore[return-value]
+
+    def update_calendar_entry(self, entry_id: int, **fields: Any) -> None:
+        allowed = {k: v for k, v in fields.items() if k in ("day", "text", "color", "lead_days")}
+        if isinstance(allowed.get("day"), date):
+            allowed["day"] = allowed["day"].isoformat()
+        if not allowed:
+            return
+        allowed["updated_at"] = time.time()
+        cols = ", ".join(f"{k} = ?" for k in allowed)
+        with self.conn:
+            self.conn.execute(f"UPDATE calendar_entries SET {cols} WHERE id = ?", (*allowed.values(), entry_id))
+
+    def delete_calendar_entry(self, entry_id: int) -> None:
+        with self.conn:
+            self.conn.execute("DELETE FROM calendar_entries WHERE id = ?", (entry_id,))
+
+    def upcoming_entries(self, today: date | None = None) -> list[CalEntry]:
+        """Entries whose heads-up period has started and whose day hasn't passed."""
+        today = today or date.today()
+        rows = self.conn.execute(
+            "SELECT * FROM calendar_entries WHERE lead_days IS NOT NULL AND day >= ? "
+            "AND julianday(day) - julianday(?) <= lead_days ORDER BY day, id",
+            (today.isoformat(), today.isoformat()))
+        return [_entry_from_row(r) for r in rows]
+
     # ---------------------------------------------------------------- backups
     def export_data(self, include_secrets: bool = False) -> dict:
         boards = {b.id: b.name for b in self.boards()}
@@ -556,6 +655,9 @@ class Database:
             "exported_at": time.time(),
             "boards": [{"name": b.name, "position": b.position} for b in self.boards()],
             "cards": cards,
+            "calendar": [{k: getattr(e, k) for k in ("uid", "day", "text", "color", "lead_days",
+                                                     "created_at", "updated_at")}
+                         for e in self.calendar_entries()],
             "settings": self.settings(),
         }
 
@@ -598,6 +700,22 @@ class Database:
                 )
                 existing.add(uid)
                 added += 1
+            have = {r[0] for r in self.conn.execute("SELECT uid FROM calendar_entries")}
+            for e in data.get("calendar") or []:
+                uid, day = e.get("uid"), e.get("day")
+                try:
+                    date.fromisoformat(day or "")
+                except (TypeError, ValueError):
+                    continue
+                if not uid or uid in have:
+                    continue
+                self.conn.execute(
+                    "INSERT INTO calendar_entries(uid, day, text, color, lead_days, created_at, updated_at) "
+                    "VALUES(?, ?, ?, ?, ?, ?, ?)",
+                    (uid, day, str(e.get("text") or ""), str(e.get("color") or "blue"),
+                     e.get("lead_days") if isinstance(e.get("lead_days"), int) else None,
+                     e.get("created_at", now), e.get("updated_at", now)))
+                have.add(uid)
         return added
 
     def backup_to(self, path: str | Path) -> None:

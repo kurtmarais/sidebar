@@ -1,6 +1,6 @@
 # Sidebar: handoff for a new chat
 
-Context for continuing work on this project in a fresh conversation. Current version **1.3.0**. All work is on branch **`claude/new-session-wmu4rs`** of `kurtmarais/sidebar` (public repo); it has **not** been merged into `main`.
+Context for continuing work on this project in a fresh conversation. Current version **1.5.0**. All work is on branch **`claude/new-session-wmu4rs`** of `kurtmarais/sidebar` (public repo); it has **not** been merged into `main`.
 
 ## What it is
 
@@ -17,7 +17,8 @@ sidebar_app/
   window.py            edge strip, slide animation, panel, views, reminders, window-follow, sync hookup
   cards.py             card widgets/types (CARD_KINDS), badges, menus, secret cards
   cardlist.py          card list, sections, drag-reorder, category tabs
-  storage.py           SQLite schema v4 (dirty flags, tombstones, starred, due_time), sync merge helpers
+  storage.py           SQLite schema v5 (dirty flags, tombstones, starred, due_time, calendar_entries), sync merge helpers
+  calendar_panel.py    month calendar at the bottom of the panel, day notes/marks, Coming up box
   sync.py              Supabase REST sync engine (urllib, no deps); newest edit wins per card
   sync_qt.py           background sync controller (daemon thread) + "Phone sync…" dialog
   quickbar.py          tiles: focus sound (YouTube in off-the-record Qt WebEngine, loaded lazily), app launcher (caffeine64.exe)
@@ -44,6 +45,7 @@ tests/                 pytest (offscreen Qt), fake_supabase.py, Playwright (Node
 
 - **Sync:** newest edit wins per card. A database trigger ignores older uploads; tombstones are kept for deletes. Same-named default categories merge across devices. Cards being typed in are not replaced mid-edit. The phone queues offline edits. Both clients leave out newer optional columns (`starred`, `due_time`) if their SQL update hasn't been run yet.
 - **Phone gestures:** a full **left** swipe archives (restores in Archive); a full **right** swipe stars/unstars; partial swipes spring back. Hold then drag reorders (Notes view, no search). Notes can only be deleted from inside the note. In the editor, Back is top left, Done top right, and Delete note at the bottom. Empty new notes are dropped.
+- **Calendar:** local only (`calendar_entries` table, never synced). Entries with text show as dots, empty ones tint the day. `lead_days` (NULL = never) puts an entry in *Coming up* above the notes. Cards with due dates are drawn from the loaded card widgets; dropping a card on a day sets its due date. Meeting-notes suggestions were removed at the user's request.
 - **Haptics:** the user said to ignore them. An inert iOS "hidden switch" haptic helper is still in `web/app.js`; leave it or remove it.
 - **Security hardening done:** links only open http/https/mailto; asset paths are confined to the assets folder; secret notes take passphrases (600k PBKDF2); focus sound uses an off-the-record web profile; the phone app has a strict CSP and renders with no `innerHTML`.
 
@@ -58,7 +60,7 @@ tests/                 pytest (offscreen Qt), fake_supabase.py, Playwright (Node
 
 ## Testing
 
-- Run `python -m pytest`: 89 tests. GUI tests use offscreen Qt. Sync tests use `tests/fake_supabase.py` (it mimics auth, PostgREST, the newest-wins trigger, row-level security, and a missing `starred` column). Phone tests drive headless Chromium through Node Playwright with real touch input (`tests/phone_e2e.js`, `tests/phone_gestures.js`).
+- Run `python -m pytest`: 93 tests. GUI tests use offscreen Qt. Sync tests use `tests/fake_supabase.py` (it mimics auth, PostgREST, the newest-wins trigger, row-level security, and a missing `starred` column). Phone tests drive headless Chromium through Node Playwright with real touch input (`tests/phone_e2e.js`, `tests/phone_gestures.js`).
 - The Supabase SQL was verified against local Postgres 16 with stubbed `auth` and roles.
 - This cloud environment cannot reach `supabase.co`, so live-project checks have to be run by the user.
 

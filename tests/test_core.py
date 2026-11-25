@@ -173,3 +173,52 @@ def test_due_at_and_today_view(db):
     db.update_card(c.id, due_time=None)
     w.card = db.card(c.id)
     assert today_section(w, date(2026, 11, 3), datetime(2026, 11, 3, 22, 0)) == "Today"   # no time: due all day
+
+
+# ------------------------------------------------------------- calendar
+def test_calendar_storage(tmp_path):
+    from datetime import date, timedelta
+    db = Database(tmp_path / "c.db")
+    today = date(2026, 11, 25)
+    a = db.add_calendar_entry(today + timedelta(days=3), "Review", "orange", 3)
+    db.add_calendar_entry(today + timedelta(days=4), "Too early", "blue", 3)
+    db.add_calendar_entry(today + timedelta(days=1), "", "green", None)           # mark: never
+    db.add_calendar_entry(today - timedelta(days=1), "Passed", "red", 10)
+    db.add_calendar_entry(today, "On the day", "teal", 0)
+    assert [e.text for e in db.upcoming_entries(today)] == ["On the day", "Review"]
+    assert len(db.calendar_entries(today, today + timedelta(days=1))) == 2
+    db.update_calendar_entry(a.id, day=today + timedelta(days=30), text="Moved")
+    assert db.calendar_entry(a.id).day == (today + timedelta(days=30)).isoformat()
+
+    # Backups carry the calendar; restoring twice adds nothing twice.
+    data = db.export_data()
+    other = Database(tmp_path / "d.db")
+    other.import_data(data)
+    other.import_data(data)
+    assert sorted(e.text for e in other.calendar_entries()) == sorted(e.text for e in db.calendar_entries())
+
+
+def test_calendar_migration_from_v4(tmp_path):
+    import sqlite3
+    db = Database(tmp_path / "old.db")
+    db.conn.execute("DROP TABLE calendar_entries")
+    db.conn.execute("PRAGMA user_version = 4")
+    db.conn.commit()
+    db.close()
+    db = Database(tmp_path / "old.db")
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    db.add_calendar_entry(__import__("datetime").date(2026, 12, 1), "ok")
+    assert sqlite3.connect(tmp_path / "old.db").execute("SELECT text FROM calendar_entries").fetchone()[0] == "ok"
+
+
+def test_calendar_helpers():
+    from datetime import date
+    from sidebar_app.calendar_panel import add_months, month_grid, upcoming_text
+    days = month_grid(2026, 11, 0)                    # Monday start
+    assert len(days) == 42 and days[0] == date(2026, 10, 26) and days[0].weekday() == 0
+    assert month_grid(2026, 11, 6)[0] == date(2026, 11, 1)   # Sunday start; 1 Nov 2026 is a Sunday
+    assert add_months(2026, 12, 1) == (2027, 1) and add_months(2026, 1, -1) == (2025, 12)
+    today = date(2026, 11, 25)
+    assert upcoming_text(today, today) == "Today"
+    assert upcoming_text(date(2026, 11, 26), today) == "Tomorrow"
+    assert upcoming_text(date(2026, 11, 28), today) == "in 3 days · Sat 28 Nov"
