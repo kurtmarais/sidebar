@@ -465,3 +465,20 @@ def test_strip_moves_only_after_press_and_hold(app, win):
     _mouse(strip, QEvent.MouseButtonPress, 20, Qt.LeftButton)
     _mouse(strip, QEvent.MouseButtonRelease, 20, Qt.NoButton)
     assert clicks == [1]
+
+
+def test_on_top_is_reasserted(app, win, monkeypatch):
+    calls = []
+    monkeypatch.setattr(winplatform, "IS_WINDOWS", True)
+    monkeypatch.setattr(winplatform, "is_topmost", lambda hwnd: False)   # Windows dropped it
+    monkeypatch.setattr(winplatform, "make_topmost", lambda hwnd: calls.append(hwnd) or True)
+    win.ensure_on_top()
+    assert calls == [int(win.winId())]
+    monkeypatch.setattr(winplatform, "is_topmost", lambda hwnd: True)
+    win.ensure_on_top()
+    assert len(calls) == 1                     # nothing to do while it is still on top
+    win.ensure_on_top(force=True)              # opening the panel lifts it above other topmost windows
+    assert len(calls) == 2
+    win.s["always_on_top"] = False
+    win.ensure_on_top(force=True)
+    assert len(calls) == 2                     # setting off: left alone

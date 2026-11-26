@@ -37,6 +37,11 @@ if IS_WINDOWS:
     _user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
     _user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     _user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    _user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    _user32.GetWindowLongW.restype = ctypes.c_long
+    _user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    _user32.SetWindowPos.restype = wintypes.BOOL
     _kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     _kernel32.OpenProcess.restype = wintypes.HANDLE
     _kernel32.QueryFullProcessImageNameW.argtypes = [
@@ -247,6 +252,29 @@ def register_hotkey(hwnd: int) -> bool:
     if not IS_WINDOWS:
         return False
     return bool(_user32.RegisterHotKey(hwnd, HOTKEY_ID, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_S))
+
+
+GWL_EXSTYLE = -20
+WS_EX_TOPMOST = 0x8
+HWND_TOPMOST = -1
+SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE, SWP_NOOWNERZORDER = 0x1, 0x2, 0x10, 0x200
+
+
+def is_topmost(hwnd: int) -> bool:
+    if sys.platform != "win32" or not hwnd:
+        return True
+    return bool(_user32.GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST)
+
+
+def make_topmost(hwnd: int) -> bool:
+    """Put the window at the top of the always-on-top band without activating it.
+    Windows can drop a window from that band (after sleep, a display change, a
+    full-screen app, or another program changing z-order), and Qt never restores it."""
+    if sys.platform != "win32" or not hwnd:
+        return False
+    return bool(_user32.SetWindowPos(
+        hwnd, ctypes.c_void_p(HWND_TOPMOST).value, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER))
 
 
 def unregister_hotkey(hwnd: int) -> None:

@@ -235,6 +235,9 @@ class SidebarWindow(QWidget):
         self.context_timer.timeout.connect(self.poll_context)
         self.focus_timer = QTimer(self)
         self.focus_timer.timeout.connect(self._focus_tick)
+        self.topmost_timer = QTimer(self)                # Windows can drop "always on top"
+        self.topmost_timer.timeout.connect(self.ensure_on_top)
+        self.topmost_timer.start(2000)
         self.day_timer = QTimer(self)                   # badges change at midnight
         self.day_timer.timeout.connect(self._refresh_badges)
         self.day_timer.start(10 * 60_000)
@@ -1188,6 +1191,7 @@ class SidebarWindow(QWidget):
             self._start_slide(1.0)
             self.syncer.sync_soon()          # pick up phone edits when opening
         self.raise_()
+        self.ensure_on_top(force=True)
         if activate:
             self.activateWindow()
 
@@ -1244,6 +1248,7 @@ class SidebarWindow(QWidget):
         return self.s["open_mode"] in ("hover", "both")
 
     def enterEvent(self, e):  # noqa: N802
+        self.ensure_on_top(force=True)
         self.close_timer.stop()
         if self._target == 0.0 and self._hover_opens():
             self.open_timer.start(int(self.s["open_delay_ms"]))
@@ -1480,6 +1485,17 @@ class SidebarWindow(QWidget):
             self.collapse(force=True)
         else:
             self.focus_search()
+
+    def ensure_on_top(self, force: bool = False) -> None:
+        """Keep the strip and panel above other windows when that setting is on.
+        Every 2 s it checks that Windows hasn't taken the window out of the
+        always-on-top band; opening the panel also lifts it above other
+        always-on-top windows (call pop-outs, other tools)."""
+        if not (winplatform.IS_WINDOWS and self.s["always_on_top"] and self.isVisible()):
+            return
+        hwnd = int(self.winId())
+        if force or not winplatform.is_topmost(hwnd):
+            winplatform.make_topmost(hwnd)
 
     def showEvent(self, e):  # noqa: N802
         super().showEvent(e)
